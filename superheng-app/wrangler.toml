@@ -31,3 +31,27 @@ pages_build_output_dir = "dist"
 # Pins the Workers/Pages runtime behaviour used when Cloudflare evaluates this
 # project. Bump deliberately, never automatically.
 compatibility_date = "2026-10-13"
+
+# Build-time variables.
+#
+# This table, not the dashboard, is what populates the build environment. With a
+# wrangler.toml present in the build root, Cloudflare reads the Pages build
+# configuration from it and reports exactly what it found in the build log:
+#
+#   Found wrangler.toml file. Reading build configuration...
+#   pages_build_output_dir: dist
+#   Build environment variables: (none found)
+#
+# A variable added in the dashboard (Settings > Variables and secrets) is of type
+# Text or Secret - a *runtime* variable. Two production builds verified this: the
+# dashboard variable was persisted, yet `npm run build` never saw it and the
+# exported bundle shipped the `127.0.0.1:8000` fallback from src/lib/api.ts.
+#
+# Expo inlines every EXPO_PUBLIC_* value at build time, so the value must be
+# readable by the build. Declaring it here also keeps it in version control,
+# where a wrong URL is visible in review instead of hidden in a dashboard.
+#
+# It is a public endpoint and is embedded in client JavaScript either way - which
+# is exactly why no secret belongs in this table.
+[vars]
+EXPO_PUBLIC_API_URL = "https://superheng-api.onrender.com"
