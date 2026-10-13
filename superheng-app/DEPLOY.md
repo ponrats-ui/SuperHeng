@@ -4,7 +4,7 @@ Production deploy guide for the beta. Two pieces ship separately:
 
 | Piece | Platform | Source | Build | Serves |
 |---|---|---|---|---|
-| Web frontend | **Cloudflare Pages** | `superheng-app/` | `npm run build` → `dist/` | `https://superheng.pages.dev` |
+| Web frontend | **Cloudflare Pages** | `superheng-app/` | `npm run build` → `dist/` | `https://superheng-3yf.pages.dev` |
 | Prediction API | **Render** (Web Service) | `superheng-app/backend/` | `pip install -r requirements.txt` | `https://superheng-api.onrender.com` |
 | Database | **Supabase** (existing) | — | — | hosted Postgres, already provisioned |
 
@@ -96,8 +96,8 @@ Create a **Web Service** from the repo, then:
 | Instance Type | Free (see the caveat below) |
 
 Environment variables: `PYTHON_VERSION=3.14.3`, `PYTHONUNBUFFERED=1`,
-`CORS_ORIGINS=https://superheng.pages.dev`,
-`CORS_ORIGIN_REGEX=^https://([a-z0-9-]+\.)?superheng\.pages\.dev$`,
+`CORS_ORIGINS=https://superheng-3yf.pages.dev`,
+`CORS_ORIGIN_REGEX=^https://([a-z0-9-]+\.)?superheng-3yf\.pages\.dev$`,
 plus the two Supabase values.
 
 Two things that are easy to get wrong:
@@ -158,8 +158,15 @@ default, so this is only about making it explicit. Deliberately set *only* this
 one — Pages also honours `.nvmrc` and `.node-version`, and the docs do not state
 which wins, so mixing methods is how environments drift.
 
-5. **Save and Deploy**. The site lands at `https://superheng.pages.dev`
-   (`<project-name>.pages.dev`; the name comes from `wrangler.toml`).
+5. **Save and Deploy**. The site lands at `https://superheng-3yf.pages.dev`.
+
+   The **project name** is `superheng` — that is what `name` in
+   [`wrangler.toml`](wrangler.toml) must match, and what `--project-name` takes.
+   The **hostname** is not the project name: `<project-name>.pages.dev` is
+   claimed globally, and `superheng.pages.dev` was already taken, so Cloudflare
+   appended a `-3yf` suffix. Preview builds live at
+   `<hash>.superheng-3yf.pages.dev`. Use the `-3yf` host everywhere below —
+   `CORS_ORIGINS` in Step 3 above all.
 
 If you rename the Pages project, update **both** `name` in
 [`wrangler.toml`](wrangler.toml) **and** `CORS_ORIGINS` on Render, or the
@@ -228,15 +235,15 @@ exists, or any site will be able to act as a logged-in user.
 Replace the two beta variables in **Render → superheng-api → Environment** with:
 
 ```
-CORS_ORIGINS=https://superheng.pages.dev
-CORS_ORIGIN_REGEX=^https://([a-z0-9-]+\.)?superheng\.pages\.dev$
+CORS_ORIGINS=https://superheng-3yf.pages.dev
+CORS_ORIGIN_REGEX=^https://([a-z0-9-]+\.)?superheng-3yf\.pages\.dev$
 ```
 
 and delete `CORS_ALLOW_CREDENTIALS`.
 
 - `CORS_ORIGINS` is a comma-separated list of **origins** — scheme, host, port,
   no trailing slash, no path. Add a custom domain here too when you attach one,
-  e.g. `https://superheng.pages.dev,https://app.superheng.app`.
+  e.g. `https://superheng-3yf.pages.dev,https://app.superheng.app`.
 - `CORS_ORIGIN_REGEX` is what keeps **preview deployments** working. Every Pages
   preview build gets a fresh `<hash>.<project>.pages.dev` host, so the pattern
   authorises all of them at once and a PR preview never needs an API change.
@@ -259,13 +266,13 @@ default (`*`), which is what local Expo builds rely on.
 
 ## Step 4 — Verify the deployed pair
 
-1. Open `https://superheng.pages.dev` in a browser and open DevTools → Console.
+1. Open `https://superheng-3yf.pages.dev` in a browser and open DevTools → Console.
    - **No CORS or "mixed content" errors.** All requests must be `https://`.
    - The header shows a live state, not the red `OFFLINE` badge.
    - "Draws analysed" and "Latest draw" are populated rather than `—`.
 2. Click through Dashboard, My Number, Insights, Performance. Each is a separate
    static HTML file on Pages, so a blank tab usually means a missing route:
-   `curl -s -o /dev/null -w '%{http_code}\n' https://superheng.pages.dev/insights`
+   `curl -s -o /dev/null -w '%{http_code}\n' https://superheng-3yf.pages.dev/insights`
    should print `200`.
 3. Open a pull request to confirm previews work: Cloudflare comments the preview
    URL, and the API accepts it via `CORS_ORIGIN_REGEX`.

@@ -253,7 +253,7 @@ app = FastAPI(
 # (`<branch>.<project>.pages.dev`) moves between builds. One pattern covers the
 # production alias and every preview hash without redeploying the API:
 #
-#   ^https://([a-z0-9-]+\.)?superheng\.pages\.dev$
+#   ^https://([a-z0-9-]+\.)?superheng-3yf\.pages\.dev$
 #
 # `allow_credentials` is governed by CORS_ALLOW_CREDENTIALS and defaults to
 # False. The note below the constants records what actually happens when it is

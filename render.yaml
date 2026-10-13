@@ -65,9 +65,9 @@ services:
         value: "true"
       # --- CORS (BEFORE LAUNCH: replace the two lines above with these) -----
       #   - key: CORS_ORIGINS
-      #     value: https://superheng.pages.dev
+      #     value: https://superheng-3yf.pages.dev
       #   - key: CORS_ORIGIN_REGEX
-      #     value: '^https://([a-z0-9-]+\.)?superheng\.pages\.dev$'
+      #     value: '^https://([a-z0-9-]+\.)?superheng-3yf\.pages\.dev$'
       # and delete CORS_ALLOW_CREDENTIALS.
       #
       # The regex is what keeps *preview* deployments working: Cloudflare gives
