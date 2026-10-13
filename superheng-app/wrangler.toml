@@ -11,9 +11,21 @@
 name = "superheng"
 
 # Directory produced by `npm run build` (`expo export -p web`). Relative to this
-# file. That command writes a static HTML file per route, which is why no
-# `_redirects` SPA fallback is needed: this is a collection of static pages, not
-# a single-page app that needs every unknown path pointed back at index.html.
+# file. That command writes one static HTML file per route, so every real route
+# is served from its own file and no `_redirects` rule is needed for them.
+#
+# Unmatched paths behave differently, and the reason is worth knowing before
+# debugging a phantom 404. Pages treats any project lacking a top-level
+# `404.html` as a single-page app and serves the root document for a path that
+# matches no asset:
+#
+#   "If your project does not include a top-level 404.html file, Pages assumes
+#    that you are deploying a single-page application."
+#   https://developers.cloudflare.com/pages/configuration/serving-pages/
+#
+# So `/does-not-exist` returns the root page, not a 404. That is Pages' built-in
+# default: a `_redirects` file is not what enables it, and shipping a `404.html`
+# in `dist/` is what disables it. See DEPLOY.md, "Known limitations".
 pages_build_output_dir = "dist"
 
 # Pins the Workers/Pages runtime behaviour used when Cloudflare evaluates this
