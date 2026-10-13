@@ -1,11 +1,23 @@
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
+import { Platform } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { useAppTheme } from '@/hooks/use-app-theme';
 
 SplashScreen.preventAutoHideAsync();
+
+/**
+ * Options shared by every full-screen modal route (see `ModalScaffold`).
+ *
+ * Expo Router renders `modal` as a plain stack route on web, so these use a
+ * transparent modal there and draw the backdrop inside the screen itself.
+ */
+const MODAL_SCREEN_OPTIONS = {
+  presentation: Platform.select({ web: 'transparentModal' as const, default: 'modal' as const }),
+  animation: Platform.select({ web: 'none' as const, default: undefined }),
+};
 
 /**
  * Root navigator.
@@ -40,6 +52,9 @@ export default function RootLayout() {
           contentStyle: { backgroundColor: colors.background },
         }}>
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="about" options={MODAL_SCREEN_OPTIONS} />
+        <Stack.Screen name="donate" options={MODAL_SCREEN_OPTIONS} />
+        <Stack.Screen name="premium" options={MODAL_SCREEN_OPTIONS} />
       </Stack>
     </ThemeProvider>
   );

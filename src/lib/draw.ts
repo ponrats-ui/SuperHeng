@@ -2,14 +2,14 @@
  * Draw schedule helpers.
  *
  * The countdown must always point at a future draw, so instead of hard-coding a
- * timestamp we compute the next occurrence of a recurring weekly schedule.
+ * timestamp we compute the next occurrence of the recurring monthly schedule.
  */
 
 export type DrawSchedule = {
-  /** Human label, e.g. "Grand Weekly Draw". */
+  /** Human label, e.g. "Government Lottery Draw". */
   title: string;
-  /** Days of week the draw runs (0 = Sunday ... 6 = Saturday). */
-  days: number[];
+  /** Days of the month the draw runs (1-based), e.g. the 1st and the 16th. */
+  daysOfMonth: number[];
   /** Local hour (0-23). */
   hour: number;
   /** Local minute (0-59). */
@@ -18,28 +18,46 @@ export type DrawSchedule = {
   timezone: string;
 };
 
+/**
+ * Thai Government Lottery (GLO) cadence: two draws a month, on the **1st and the
+ * 16th**, with the result announced in the late afternoon.
+ *
+ * This replaced an earlier placeholder that claimed a weekly Sun/Wed/Sat draw.
+ * Verified against GLO's own API: draws exist for 2024-03-01 and 2024-03-16,
+ * while non-draw dates answer `{"response": null}`.
+ */
 export const DRAW_SCHEDULE: DrawSchedule = {
-  title: 'Grand Weekly Draw',
-  days: [0, 3, 6], // Sun, Wed, Sat
-  hour: 18,
-  minute: 30,
+  title: 'Government Lottery Draw',
+  daysOfMonth: [1, 16],
+  hour: 16,
+  minute: 0,
   timezone: 'Your local time',
 };
 
 /** Returns the next scheduled draw instant strictly after `from`. */
 export function getNextDrawAt(from: Date = new Date(), schedule: DrawSchedule = DRAW_SCHEDULE): Date {
-  for (let offset = 0; offset <= 7; offset++) {
-    const candidate = new Date(from);
-    candidate.setDate(from.getDate() + offset);
-    candidate.setHours(schedule.hour, schedule.minute, 0, 0);
-    if (schedule.days.includes(candidate.getDay()) && candidate.getTime() > from.getTime()) {
+  // Scan day by day; `new Date(y, m, d + offset)` rolls the month over for us, so
+  // month boundaries and short months need no special casing.
+  const horizonDays = 62; // two months is enough to find a hit for any monthly schedule
+  for (let offset = 0; offset <= horizonDays; offset++) {
+    const candidate = new Date(
+      from.getFullYear(),
+      from.getMonth(),
+      from.getDate() + offset,
+      schedule.hour,
+      schedule.minute,
+      0,
+      0
+    );
+    if (
+      schedule.daysOfMonth.includes(candidate.getDate()) &&
+      candidate.getTime() > from.getTime()
+    ) {
       return candidate;
     }
   }
-  // Fallback: exactly one week out (schedule with no matching day).
-  const fallback = new Date(from);
-  fallback.setDate(from.getDate() + 7);
-  return fallback;
+  // Fallback: the next 1st of the month, so the countdown always has a target.
+  return new Date(from.getFullYear(), from.getMonth() + 1, 1, schedule.hour, schedule.minute, 0, 0);
 }
 
 export type Countdown = {

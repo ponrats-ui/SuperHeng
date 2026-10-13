@@ -1,12 +1,14 @@
-import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { router } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import {
   AppHeader,
   Card,
   Countdown,
+  HeaderIconButton,
+  LockedPanel,
   PageScaffold,
-  RadarChart,
   RankRow,
   ScoreRing,
   SectionHeader,
@@ -15,33 +17,223 @@ import {
 } from '@/components/superheng';
 import { ThemedText } from '@/components/themed-text';
 import { Brand, Radius, Spacing } from '@/constants/theme';
-import { DRAW_META, MODEL_SIGNALS, RADAR_AXES, RANKINGS, TOP_PICK } from '@/data/mock';
+import { DRAW_META, type SignalTone } from '@/data/mock';
 import { useAppTheme } from '@/hooks/use-app-theme';
+import {
+  BASE_URL,
+  getBasicPredictions,
+  isApiError,
+  toRankings,
+  type BasicPredictions,
+  type ChannelKey,
+} from '@/lib/api';
 import { getNextDrawAt } from '@/lib/draw';
-import { formatCount } from '@/lib/format';
+import { formatCount, formatDate, formatThaiDate } from '@/lib/format';
 
-type Market = 'top' | 'bottom';
+/** The two independently drawn 2-digit positions the backend ranks. */
+type Market = ChannelKey;
 
 const MARKET_OPTIONS = [
   { key: 'top' as const, label: 'Top Position' },
   { key: 'bottom' as const, label: 'Bottom Position' },
 ];
 
+/** Display names for the signals the backend can actually apply today. */
+const SIGNAL_LABELS: Record<string, string> = {
+  frequency: 'Frequency',
+  markov: 'Markov Chain',
+};
+
+/**
+ * Models named in the roadmap that Day 3 does not implement yet.
+ *
+ * Listed inactive so the ensemble panel states what really feeds the score. The
+ * mock layer this screen used to read claimed ARIMA and Monte Carlo were live,
+ * which stopped being true the moment real data arrived.
+ */
+const PLANNED_SIGNALS = [
+  { key: 'arima', label: 'ARIMA', detail: 'Time-series drift' },
+  { key: 'monte', label: 'Monte Carlo', detail: '10k simulations' },
+  { key: 'lstm', label: 'LSTM', detail: 'Sequence net' },
+] as const;
+
+/** Verdict wording per signal tone. Mirrors the backend's `tone` field. */
+const TONE_VERDICT: Record<SignalTone, string> = {
+  high: 'Strong signal',
+  medium: 'Positive signal',
+  low: 'Weak signal',
+  cold: 'No meaningful signal',
+};
+
+/**
+ * Premium tiers shown as locked teasers on the dashboard.
+ *
+ * `digits` only sizes the masked preview — no placeholder numbers are shown, so
+ * a locked tier can never be mistaken for a real prediction.
+ */
+const LOCKED_TIERS = [
+  {
+    badge: '3-DIGIT',
+    title: '3 ตัว',
+    subtitle: 'วิเคราะห์เลขท้าย 3 ตัว รายตำแหน่ง พร้อมอันดับและคะแนน Heng',
+    digits: 3,
+  },
+  {
+    badge: '6-DIGIT',
+    title: 'รางวัลที่ 1',
+    subtitle: 'วิเคราะห์เลข 6 ตัว (รางวัลที่ 1) ด้วยโมเดลขั้นสูง',
+    digits: 6,
+  },
+] as const;
+
 export default function DashboardScreen() {
   const { colors } = useAppTheme();
   const [market, setMarket] = useState<Market>('top');
 
-  // The next draw instant is stable for the life of the screen; the Countdown
-  // component owns the per-second ticking.
-  const drawAt = useMemo(() => getNextDrawAt(), []);
-  const entries = RANKINGS[market];
+  const [predictions, setPredictions] = useState<BasicPredictions | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  /** Bumped by Retry; the fetch effect keys off it. */
+  const [reloadKey, setReloadKey] = useState(0);
+
+  /**
+   * The mount fetch, and every later retry.
+   *
+   * The request is started with `.then` rather than `await` so that no state is
+   * written synchronously inside the effect body. Writing state there schedules a
+   * cascading render before the request has even been sent, which is what the
+   * `set-state-in-effect` rule exists to catch; the initial `loading: true`
+   * already covers the first paint.
+   *
+   * `cancelled` is the ordering guarantee: re-running this effect (a retry) or
+   * unmounting flips the previous closure's flag, so a slow response from a
+   * superseded request can never overwrite the newer result.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    void getBasicPredictions().then(
+      (result) => {
+        if (cancelled) return;
+        setPredictions(result);
+        setError(null);
+        setLoading(false);
+      },
+      (caught: unknown) => {
+        if (cancelled) return;
+        // Drop the stale numbers rather than leaving them on screen beside an
+        // error: the previous run's picks are no longer what the server says.
+        setPredictions(null);
+        setError(
+          isApiError(caught) ? caught.message : 'Something went wrong while loading predictions.'
+        );
+        setLoading(false);
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  /** Retry is an explicit user action, so it may flip straight back to loading. */
+  const retry = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    setReloadKey((key) => key + 1);
+  }, []);
+
+  // The API may declare the next draw date; Day 3's payload does not, so fall
+  // back to the locally computed GLO schedule (1st/16th, verified against GLO).
+  const scheduledDrawAt = useMemo(() => getNextDrawAt(), []);
+  const drawAt = useMemo(() => {
+    const declared = predictions?.next_draw_date;
+    if (!declared) return scheduledDrawAt;
+    const parsed = new Date(declared);
+    return Number.isNaN(parsed.getTime()) ? scheduledDrawAt : parsed;
+  }, [predictions?.next_draw_date, scheduledDrawAt]);
+
+  const rankings = useMemo(() => (predictions ? toRankings(predictions) : null), [predictions]);
+  const entries = rankings?.[market] ?? [];
+
+  const channel = predictions?.channels[market] ?? null;
+  const topChannel = predictions?.channels.top ?? null;
+  const pick = topChannel?.rankings[0] ?? null;
+
+  const weights = useMemo(() => topChannel?.weights ?? {}, [topChannel]);
+  const modelNames = useMemo(
+    () =>
+      Object.keys(weights)
+        .filter((key) => weights[key] > 0)
+        .map((key) => SIGNAL_LABELS[key] ?? key),
+    [weights]
+  );
+
+  const signals = useMemo(
+    () => [
+      ...Object.entries(weights)
+        .filter(([, weight]) => weight > 0)
+        .map(([key, weight]) => ({
+          key,
+          label: SIGNAL_LABELS[key] ?? key,
+          detail: `${Math.round(weight * 100)}% weight`,
+          active: true,
+        })),
+      ...PLANNED_SIGNALS.map((signal) => ({
+        key: signal.key as string,
+        label: signal.label,
+        detail: `${signal.detail} · planned`,
+        active: false,
+      })),
+    ],
+    [weights]
+  );
+
+  const dataLine = predictions?.latest_draw
+    ? `ข้อมูลถึงงวด ${formatThaiDate(new Date(predictions.latest_draw.draw_date))} · ` +
+      `${formatCount(predictions.draws_analyzed)} งวด`
+    : null;
 
   return (
     <PageScaffold>
       <AppHeader
         subtitle="Probability intelligence"
-        right={<LiveBadge />}
+        right={
+          <View style={styles.headerActions}>
+            <LiveBadge online={predictions !== null && error === null} />
+            <HeaderIconButton
+              ios="info.circle"
+              android="info"
+              label="เบื้องหลังการคำนวณ"
+              onPress={() => router.push('/about')}
+            />
+          </View>
+        }
       />
+
+      {/*
+        Draw-date notice. Sits above everything else so the analysed period is
+        never ambiguous, and explains the automatic post-draw reset.
+      */}
+      <View style={[styles.notice, { backgroundColor: colors.card, borderColor: colors.gold }]}>
+        <View style={[styles.noticeRule, { backgroundColor: colors.gold }]} />
+        <View style={styles.noticeBody}>
+          <ThemedText style={styles.noticeText}>
+            วิเคราะห์เพื่อประกอบการตัดสินใจ งวดวันที่:{' '}
+            <ThemedText style={[styles.noticeDate, { color: colors.gold }]}>
+              {formatThaiDate(drawAt)}
+            </ThemedText>
+          </ThemedText>
+          <ThemedText type="small" themeColor="textMuted" style={styles.noticeSub}>
+            ระบบจะรีเซ็ตและคำนวณสถิติใหม่โดยอัตโนมัติหลังหวยออก เพื่อเตรียมพร้อมสำหรับงวดถัดไป
+          </ThemedText>
+          {dataLine ? (
+            <ThemedText type="small" themeColor="textMuted" style={styles.noticeSub}>
+              {dataLine}
+            </ThemedText>
+          ) : null}
+        </View>
+      </View>
 
       {/* Draw countdown strip */}
       <Card>
@@ -57,100 +249,215 @@ export default function DashboardScreen() {
 
         <View style={styles.metaRow}>
           <MetaItem label="Jackpot" value={DRAW_META.jackpot} color={colors.gold} />
-          <MetaItem label="Draws analysed" value={formatCount(DRAW_META.drawsAnalysed)} />
-          <MetaItem label="Timezone" value={DRAW_META.timezone} />
+          <MetaItem
+            label="Draws analysed"
+            value={predictions ? formatCount(predictions.draws_analyzed) : '—'}
+          />
+          <MetaItem
+            label="Latest draw"
+            value={predictions?.latest_draw ? formatDate(predictions.latest_draw.draw_date) : '—'}
+          />
         </View>
       </Card>
 
-      {/* Top pick hero */}
-      <Card padded={false}>
-        <View style={styles.hero}>
-          <View style={styles.heroTopRow}>
-            <View style={styles.tag}>
-              <ThemedText style={[styles.tagText, { color: colors.gold }]}>AI TOP PICK</ThemedText>
+      {/*
+        Data-dependent region. Loading, failure and "not enough history" are three
+        distinct states, and only the middle one is an error.
+      */}
+      {loading ? <LoadingCard /> : null}
+
+      {!loading && error ? <ErrorCard message={error} onRetry={retry} /> : null}
+
+      {!loading && !error && predictions && !pick ? (
+        <InsufficientCard predictions={predictions} />
+      ) : null}
+
+      {!loading && !error && predictions && pick && topChannel ? (
+        <>
+          {/* Top pick hero */}
+          <Card padded={false}>
+            <View style={styles.hero}>
+              <View style={styles.heroTopRow}>
+                <View style={styles.tag}>
+                  <ThemedText style={[styles.tagText, { color: colors.gold }]}>
+                    AI TOP PICK
+                  </ThemedText>
+                </View>
+                <View style={styles.confidencePill}>
+                  <View style={styles.liveDot} />
+                  <ThemedText style={styles.confidenceText}>
+                    {pick.tone.toUpperCase()} CONFIDENCE
+                  </ThemedText>
+                </View>
+              </View>
+
+              <View style={styles.heroMain}>
+                <View style={styles.heroCodeBlock}>
+                  <ThemedText style={styles.heroPositional}>2-DIGIT · TOP POSITION</ThemedText>
+                  <ThemedText style={styles.heroCode}>{pick.code}</ThemedText>
+                  <ThemedText style={styles.heroVerdict}>{TONE_VERDICT[pick.tone]}</ThemedText>
+                  <ThemedText style={styles.heroModels}>{modelNames.join('  ·  ')}</ThemedText>
+                </View>
+
+                <ScoreRing
+                  score={pick.score}
+                  size={132}
+                  thickness={4}
+                  color={Brand.goldBright}
+                  trackColor="rgba(255,255,255,0.22)"
+                  textColor="rgba(255,255,255,0.75)"
+                  label="Heng score"
+                />
+              </View>
+
+              <View style={styles.heroDivider} />
+
+              {/*
+                Real evidence instead of the mock radar. The radar chart needs five
+                axis values and the API supplies two — filling the rest would mean
+                inventing data, which is exactly what this app must not do.
+              */}
+              <View style={styles.heroFooter}>
+                <HeroStat
+                  label="Sample size"
+                  value={`${formatCount(predictions.draws_analyzed)} draws`}
+                />
+                <HeroStat label="Board state" value={topChannel.current_state} />
+                <HeroStat
+                  label="Markov support"
+                  value={`${topChannel.markov.support} transitions`}
+                />
+                <HeroStat
+                  label="Frequency lift"
+                  value={`${pick.evidence.frequency.lift.toFixed(2)}× uniform`}
+                />
+              </View>
             </View>
-            <View style={styles.confidencePill}>
-              <View style={styles.liveDot} />
-              <ThemedText style={styles.confidenceText}>
-                {TOP_PICK.confidence.toUpperCase()} CONFIDENCE
+          </Card>
+
+          {/* Rankings */}
+          <Card>
+            <SectionHeader
+              title="Rankings"
+              subtitle={
+                channel
+                  ? `${channel.label} · ${formatCount(channel.draws)} draws analysed · state ${channel.current_state}`
+                  : '2-digit position model'
+              }
+            />
+
+            <View style={styles.controlRow}>
+              <SegmentedControl options={MARKET_OPTIONS} value={market} onChange={setMarket} />
+            </View>
+
+            <View style={styles.list}>
+              {entries.map((entry, index) => (
+                <View key={entry.code} style={styles.listItem}>
+                  {index > 0 ? (
+                    <View style={[styles.divider, { backgroundColor: colors.cardBorder }]} />
+                  ) : null}
+                  <RankRow rank={index + 1} entry={entry} />
+                </View>
+              ))}
+            </View>
+
+            <ThemedText type="small" themeColor="textMuted" style={styles.listNote}>
+              Bar length is the Heng score (0–100). The pill is the model&apos;s literal per-draw
+              probability, where 1.0% is the uniform baseline across 100 codes.
+            </ThemedText>
+          </Card>
+
+          {/* Model ensemble */}
+          <Card>
+            <SectionHeader
+              title="Model ensemble"
+              subtitle="Signals currently feeding the prediction"
+            />
+            <View style={styles.chips}>
+              {signals.map((signal) => (
+                <SignalChip
+                  key={signal.key}
+                  label={signal.label}
+                  detail={signal.detail}
+                  active={signal.active}
+                />
+              ))}
+            </View>
+          </Card>
+
+          {/*
+            The backend reports every limitation it knows about (thin Markov
+            support, a short window). Rendering them keeps a low-confidence
+            ranking from reading like a confident one.
+          */}
+          {predictions.warnings.length > 0 ? (
+            <Card>
+              <SectionHeader title="Data conditions" subtitle={`Model status: ${predictions.status}`} />
+              <View style={styles.warnList}>
+                {predictions.warnings.map((warning) => (
+                  <ThemedText
+                    key={warning}
+                    type="small"
+                    themeColor="textMuted"
+                    style={styles.warnItem}>
+                    • {warning}
+                  </ThemedText>
+                ))}
+              </View>
+            </Card>
+          ) : null}
+        </>
+      ) : null}
+
+      {/*
+        Premium teasers. Purely presentational — the lock is a sales surface, not
+        an access control, so anything genuinely premium must be gated on the
+        server when Phase 2 lands.
+      */}
+      <Card>
+        <SectionHeader
+          title="Premium insights"
+          subtitle="วิเคราะห์เจาะลึกเลข 3 ตัว และ 6 ตัว"
+          action={
+            <View style={[styles.premiumPill, { borderColor: `${colors.gold}80` }]}>
+              <ThemedText type="small" style={[styles.premiumPillText, { color: colors.accent }]}>
+                🔒 LOCKED
               </ThemedText>
             </View>
-          </View>
-
-          <View style={styles.heroMain}>
-            <View style={styles.heroCodeBlock}>
-              <ThemedText style={styles.heroPositional}>2-DIGIT · TOP POSITION</ThemedText>
-              <ThemedText style={styles.heroCode}>{TOP_PICK.code}</ThemedText>
-              <ThemedText style={styles.heroVerdict}>{TOP_PICK.verdict}</ThemedText>
-              <ThemedText style={styles.heroModels}>{TOP_PICK.models.join('  ·  ')}</ThemedText>
-            </View>
-
-            <ScoreRing
-              score={TOP_PICK.score}
-              size={132}
-              thickness={4}
-              color={Brand.goldBright}
-              trackColor="rgba(255,255,255,0.22)"
-              textColor="rgba(255,255,255,0.75)"
-              label="Heng score"
-            />
-          </View>
-
-          <View style={styles.heroDivider} />
-
-          <View style={styles.heroFooter}>
-            <RadarChart
-              values={TOP_PICK.radar}
-              size={116}
-              color={Brand.goldBright}
-              gridColor="rgba(255,255,255,0.24)"
-            />
-            <View style={styles.heroStats}>
-              <HeroStat label="Sample size" value={`${formatCount(TOP_PICK.sampleSize)} draws`} />
-              <HeroStat label="Strongest axis" value={RADAR_AXES[1]} />
-              <HeroStat
-                label="Model agreement"
-                value={`${TOP_PICK.models.length}/${MODEL_SIGNALS.length} engines`}
-              />
-            </View>
-          </View>
-        </View>
-      </Card>
-
-      {/* Rankings */}
-      <Card>
-        <SectionHeader title="Rankings" subtitle="2-digit position model · top 5" />
-
-        <View style={styles.controlRow}>
-          <SegmentedControl options={MARKET_OPTIONS} value={market} onChange={setMarket} />
-        </View>
-
-        <View style={styles.list}>
-          {entries.map((entry, index) => (
-            <View key={entry.code} style={styles.listItem}>
-              {index > 0 ? (
-                <View style={[styles.divider, { backgroundColor: colors.cardBorder }]} />
-              ) : null}
-              <RankRow rank={index + 1} entry={entry} />
-            </View>
-          ))}
-        </View>
-      </Card>
-
-      {/* Model ensemble */}
-      <Card>
-        <SectionHeader title="Model ensemble" subtitle="Signals currently feeding the prediction" />
-        <View style={styles.chips}>
-          {MODEL_SIGNALS.map((signal) => (
-            <SignalChip
-              key={signal.key}
-              label={signal.label}
-              detail={signal.detail}
-              active={signal.active}
+          }
+        />
+        <View style={styles.premiumList}>
+          {LOCKED_TIERS.map((tier) => (
+            <LockedPanel
+              key={tier.badge}
+              badge={tier.badge}
+              title={tier.title}
+              subtitle={tier.subtitle}
+              digits={tier.digits}
+              onPress={() => router.push('/premium')}
             />
           ))}
         </View>
       </Card>
+
+      {/*
+        Support entry point. Deliberately a button rather than the QR itself —
+        the code is only rendered inside the donate modal.
+      */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="สนับสนุนนักพัฒนา"
+        onPress={() => router.push('/donate')}
+        style={({ pressed }) => [
+          styles.donate,
+          { borderColor: colors.gold, backgroundColor: colors.backgroundElement },
+          pressed && styles.pressed,
+        ]}>
+        <ThemedText style={styles.donateTitle}>💸 ถูกรางวัล? เลี้ยงกาแฟทีมงาน</ThemedText>
+        <ThemedText type="small" themeColor="textMuted" style={styles.donateSub}>
+          สนับสนุนนักพัฒนา (Donate)
+        </ThemedText>
+      </Pressable>
 
       <ThemedText type="small" themeColor="textMuted" style={styles.disclaimer}>
         Predictions are statistical estimates from historical draw data. No model can guarantee an
@@ -160,15 +467,103 @@ export default function DashboardScreen() {
   );
 }
 
-function LiveBadge() {
+/**
+ * Header badge.
+ *
+ * Reports whether the live model actually answered, rather than always claiming
+ * "LIVE" — a permanently lit badge above an error card is a lie the user cannot
+ * see through.
+ */
+function LiveBadge({ online }: { online: boolean }) {
   const { colors } = useAppTheme();
   return (
     <View style={[styles.liveBadge, { backgroundColor: colors.backgroundElement }]}>
-      <View style={[styles.liveDot, { backgroundColor: colors.success }]} />
+      <View style={[styles.liveDot, { backgroundColor: online ? colors.success : colors.neutral }]} />
       <ThemedText type="small" style={[styles.liveText, { color: colors.textSecondary }]}>
-        LIVE
+        {online ? 'LIVE' : 'OFFLINE'}
       </ThemedText>
     </View>
+  );
+}
+
+/** Shown while the request is in flight. */
+function LoadingCard() {
+  const { colors } = useAppTheme();
+  return (
+    <Card>
+      <View style={styles.stateBody}>
+        <ActivityIndicator color={colors.primary} />
+        <ThemedText type="small" themeColor="textSecondary" style={styles.stateText}>
+          กำลังโหลดผลวิเคราะห์จากเซิร์ฟเวอร์…
+        </ThemedText>
+        <ThemedText type="small" themeColor="textMuted" style={styles.stateHint}>
+          {BASE_URL}/api/predict/basic
+        </ThemedText>
+      </View>
+    </Card>
+  );
+}
+
+/** Shown when the call failed — the one state that is genuinely an error. */
+function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { colors } = useAppTheme();
+  return (
+    <Card>
+      <View style={styles.errHeader}>
+        <View style={[styles.errRule, { backgroundColor: colors.danger }]} />
+        <ThemedText type="smallBold" style={[styles.errTitle, { color: colors.danger }]}>
+          โหลดข้อมูลไม่สำเร็จ
+        </ThemedText>
+      </View>
+
+      <ThemedText type="small" themeColor="textSecondary" style={styles.errBody}>
+        {message}
+      </ThemedText>
+      <ThemedText type="small" themeColor="textMuted" style={styles.errHint}>
+        ต้องรัน backend ที่ {BASE_URL} ก่อน — uvicorn main:app --reload
+      </ThemedText>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="ลองอีกครั้ง"
+        onPress={onRetry}
+        style={({ pressed }) => [
+          styles.retry,
+          { backgroundColor: colors.primary },
+          pressed && styles.pressed,
+        ]}>
+        <ThemedText type="smallBold" style={[styles.retryText, { color: colors.onPrimary }]}>
+          ลองอีกครั้ง (Retry)
+        </ThemedText>
+      </Pressable>
+    </Card>
+  );
+}
+
+/**
+ * Shown when the request succeeded but there is not enough history to rank.
+ *
+ * A distinct state from `ErrorCard` on purpose: an empty ledger is a successful
+ * call, and the backend answers it with HTTP 200 and a `status` rather than a
+ * failure so the client can render this instead of an error.
+ */
+function InsufficientCard({ predictions }: { predictions: BasicPredictions }) {
+  return (
+    <Card>
+      <SectionHeader
+        title="ยังไม่มีข้อมูลเพียงพอ"
+        subtitle={`Model status: ${predictions.status}`}
+      />
+      <ThemedText type="small" themeColor="textSecondary" style={styles.errBody}>
+        ฐานข้อมูลมี {formatCount(predictions.draws_analyzed)} งวด ระบบจึงยังไม่สร้างอันดับ —
+        การจัดอันดับจากข้อมูลเท่านี้จะเป็นตัวเลขเดาสุ่ม ไม่ใช่ผลวิเคราะห์
+      </ThemedText>
+      {predictions.warnings[0] ? (
+        <ThemedText type="small" themeColor="textMuted" style={styles.errHint}>
+          {predictions.warnings[0]}
+        </ThemedText>
+      ) : null}
+    </Card>
   );
 }
 
@@ -196,6 +591,11 @@ function HeroStat({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   // Header ---------------------------------------------------------------
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
   liveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -214,6 +614,61 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     backgroundColor: Brand.goldBright,
+  },
+
+  // Draw-date notice -----------------------------------------------------
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: Spacing.two + 2,
+    padding: Spacing.three,
+    borderRadius: Radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  noticeRule: {
+    width: 3,
+    borderRadius: 2,
+  },
+  noticeBody: {
+    flex: 1,
+    gap: Spacing.one,
+  },
+  noticeText: {
+    // Thai needs a taller line box than the Latin default would give it.
+    fontSize: 14,
+    lineHeight: 26,
+    fontWeight: '700',
+  },
+  noticeDate: {
+    fontSize: 14,
+    lineHeight: 26,
+    fontWeight: '800',
+  },
+  noticeSub: {
+    fontSize: 11,
+    lineHeight: 20,
+  },
+
+  // Donate ---------------------------------------------------------------
+  donate: {
+    alignItems: 'center',
+    gap: Spacing.half,
+    paddingVertical: Spacing.three,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+  },
+  donateTitle: {
+    fontSize: 15,
+    lineHeight: 26,
+    fontWeight: '700',
+  },
+  donateSub: {
+    fontSize: 11,
+    letterSpacing: 0.4,
+  },
+  pressed: {
+    opacity: 0.7,
   },
 
   // Draw strip -----------------------------------------------------------
@@ -337,14 +792,12 @@ const styles = StyleSheet.create({
   },
   heroFooter: {
     flexDirection: 'row',
-    alignItems: 'center',
+    flexWrap: 'wrap',
     gap: Spacing.three,
   },
-  heroStats: {
-    flex: 1,
-    gap: Spacing.two,
-  },
   heroStat: {
+    minWidth: 100,
+    flexGrow: 1,
     gap: 1,
   },
   heroStatLabel: {
@@ -375,6 +828,38 @@ const styles = StyleSheet.create({
   divider: {
     height: StyleSheet.hairlineWidth,
   },
+  listNote: {
+    fontSize: 10,
+    lineHeight: 15,
+    marginTop: Spacing.three,
+  },
+
+  // Data conditions ------------------------------------------------------
+  warnList: {
+    marginTop: Spacing.three,
+    gap: Spacing.two,
+  },
+  warnItem: {
+    fontSize: 11,
+    lineHeight: 16,
+  },
+
+  // Premium teasers ------------------------------------------------------
+  premiumPill: {
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.half,
+    borderRadius: Radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  premiumPillText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  premiumList: {
+    gap: Spacing.three,
+    marginTop: Spacing.three,
+  },
 
   // Ensemble -------------------------------------------------------------
   chips: {
@@ -382,6 +867,55 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: Spacing.two,
     marginTop: Spacing.three,
+  },
+
+  // Load / error / empty states ------------------------------------------
+  stateBody: {
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingVertical: Spacing.four,
+  },
+  stateText: {
+    fontSize: 13,
+    lineHeight: 22,
+  },
+  stateHint: {
+    fontSize: 10,
+    letterSpacing: 0.3,
+  },
+  errHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  errRule: {
+    width: 3,
+    height: 14,
+    borderRadius: 2,
+  },
+  errTitle: {
+    letterSpacing: 0.4,
+  },
+  errBody: {
+    fontSize: 12,
+    lineHeight: 20,
+    marginTop: Spacing.two,
+  },
+  errHint: {
+    fontSize: 10,
+    lineHeight: 16,
+    marginTop: Spacing.one,
+  },
+  retry: {
+    alignSelf: 'flex-start',
+    marginTop: Spacing.three,
+    paddingHorizontal: Spacing.four,
+    paddingVertical: Spacing.two,
+    borderRadius: Radius.pill,
+  },
+  retryText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
 
   disclaimer: {

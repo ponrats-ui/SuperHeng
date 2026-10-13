@@ -1,0 +1,67 @@
+# SuperHeng backend — Day 2 dependencies
+#
+# Install into the backend virtualenv:
+#     cd backend
+#     python -m venv .venv
+#     .venv/Scripts/python -m pip install -r requirements.txt   # Windows
+#     .venv/bin/python     -m pip install -r requirements.txt   # macOS / Linux
+#
+# Interpreter: Python 3.14.4 (verified on this machine). Every package below
+# installs from a wheel with no build step — see "Verified stack" at the bottom.
+
+# --- API service (main.py) -------------------------------------------------
+fastapi>=0.143
+# [standard] adds the watchfiles reloader (needed for --reload on Windows) plus
+# httptools/websockets. Plain `uvicorn` has no reloader and silently ignores
+# --reload, which is a confusing failure mode during development.
+uvicorn[standard]>=0.54
+
+# --- Database (Supabase / PostgreSQL) --------------------------------------
+# Pulls postgrest-py, storage3, realtime and httpx.
+supabase>=2.32
+
+# --- Configuration ---------------------------------------------------------
+python-dotenv>=1.2
+
+# --- Ingestion (scraper.py / data_ingestion.py) ----------------------------
+requests>=2.32
+beautifulsoup4>=4.15      # HTML archive fallback parser
+pandas>=3.0               # optional: CSV export in data_ingestion.py
+
+# --- Advanced models (Day 5) -----------------------------------------------
+# NOTE: statsmodels is imported lazily, inside /api/predict/advanced, not at
+# module scope. `import statsmodels.tsa.arima.model` costs a measured 1738 ms on
+# this machine, and a top-level import would add that to every uvicorn start,
+# every --reload restart and every test run that merely imports main.
+statsmodels>=0.15
+# Declared as requested, and NOT yet imported by any backend module — there is no
+# sklearn call in the Day 5 code. It is the baseline for the ML work the roadmap
+# still has ahead: chronological train/validation splits and permutation
+# importance for the LSTM tier (VISION §2.4), and rank aggregation for the
+# scorecard. It pulls scipy, which statsmodels also needs, so the install cost is
+# shared rather than additive. Stated plainly rather than given a token use to
+# justify its presence.
+scikit-learn>=1.9
+
+# --- Development / tests (not needed to run the service) -------------------
+# The Day 3 unit tests for the statistical models:
+#     .venv/Scripts/python -m pytest -q
+pytest>=9.1
+
+# --- Verified stack --------------------------------------------------------
+# These are the exact versions that were installed and exercised on this
+# machine (CPython 3.14.4, Windows). Treat them as the known-good floor; the
+# `>=` bounds above stay loose so patch releases flow in.
+#
+#   fastapi==0.143.0      starlette==1.7.0     pydantic==2.14.1
+#   uvicorn==0.54.0       supabase==2.32.0     postgrest==2.32.0
+#   realtime==2.32.0      storage3==2.32.0     httpx==0.28.1
+#   requests==2.34.2      beautifulsoup4==4.15.0  soupsieve==3.0.3
+#   python-dotenv==1.2.4  pandas==3.0.6        numpy==2.5.4
+#   pytest==9.1.1
+#
+# Day 5 additions (installed from cp314 wheels — no build step needed):
+#   statsmodels==0.15.0   scikit-learn==1.9.1   scipy==1.18.1
+#   patsy==1.0.3          formulaic==1.2.2      interface-meta==2.0.1
+#   joblib==1.6.0         threadpoolctl==3.7.0  cloudpickle==3.1.2
+#   narwhals==2.27.1      wrapt==2.5.1rc1

@@ -26,6 +26,12 @@ export type RankEntry = {
   delta: number;
   /** Draws since last appearance, `null` when outside the sample window. */
   lastSeenDays: number | null;
+  /**
+   * One-line explanation of what drove the score, assembled by the backend from
+   * the evidence it actually computed. Optional because the mock layer predates
+   * it; the live `/api/predict/basic` payload always supplies one.
+   */
+  reason?: string;
 };
 
 export type TopPick = {

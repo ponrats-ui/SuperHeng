@@ -12,11 +12,29 @@ export type RankRowProps = {
   entry: RankEntry;
 };
 
-/** One row of a top-5 ranking list: code, signal delta, and probability meter. */
+/**
+ * One row of a top-5 ranking list: code, signal delta, probability meter, and the
+ * evidence the backend used.
+ *
+ * Two different numbers appear here on purpose, and they are not
+ * interchangeable:
+ *
+ * * the **pill** is the model's literal per-draw probability for that code.
+ *   Across 100 candidates a uniform draw is 1.0%, so real values sit near 1-2%.
+ * * the **bar** shows the **Heng Score** (0-100) instead. The score is
+ *   rank-normalised, which is what makes a 2% pick visually distinct from a 1%
+ *   one; feeding the raw probability into a 0-100 bar would render every row as
+ *   the same empty stub and hide the ranking it exists to show.
+ */
 export function RankRow({ rank, entry }: RankRowProps) {
   const { colors } = useAppTheme();
   const tone = probabilityColor(entry.score);
-  const positive = entry.delta >= 0;
+  // `delta` is 0.0 until the backend persists a previous model run, so zero is
+  // "no movement recorded", not "moved up". Treating it as positive would paint
+  // every row with a green up-arrow and invent a signal the models never
+  // reported.
+  const moved = entry.delta !== 0;
+  const positive = entry.delta > 0;
 
   return (
     <View style={styles.container}>
@@ -33,12 +51,23 @@ export function RankRow({ rank, entry }: RankRowProps) {
             <View
               style={[
                 styles.deltaChip,
-                { backgroundColor: positive ? `${colors.success}22` : `${colors.danger}22` },
+                {
+                  backgroundColor: moved
+                    ? positive
+                      ? `${colors.success}22`
+                      : `${colors.danger}22`
+                    : colors.backgroundElement,
+                },
               ]}>
               <ThemedText
                 type="small"
-                style={[styles.deltaText, { color: positive ? colors.success : colors.danger }]}>
-                {positive ? '▲' : '▼'} {formatDelta(entry.delta)}
+                style={[
+                  styles.deltaText,
+                  {
+                    color: moved ? (positive ? colors.success : colors.danger) : colors.textMuted,
+                  },
+                ]}>
+                {moved ? `${positive ? '▲' : '▼'} ${formatDelta(entry.delta)}` : '±0.0'}
               </ThemedText>
             </View>
           </View>
@@ -52,7 +81,13 @@ export function RankRow({ rank, entry }: RankRowProps) {
         </View>
       </View>
 
-      <ProbabilityBar value={entry.probability} color={tone} height={5} />
+      <ProbabilityBar value={entry.score} color={tone} height={5} />
+
+      {entry.reason ? (
+        <ThemedText type="small" themeColor="textMuted" style={styles.reason}>
+          {entry.reason}
+        </ThemedText>
+      ) : null}
     </View>
   );
 }
@@ -114,5 +149,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
+  },
+  reason: {
+    fontSize: 11,
+    lineHeight: 16,
   },
 });

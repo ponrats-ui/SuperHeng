@@ -41,3 +41,15 @@ example
 # generated native folders
 /ios
 /android
+
+# Python (backend)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Ingested GLO data — reproducible via backend/data_ingestion.py.
+# GLO's open-data catalogue is licensed CC Non-Commercial (Any); re-fetch rather
+# than redistribute the raw dump.
+backend/data/

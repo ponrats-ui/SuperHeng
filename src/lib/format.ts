@@ -23,6 +23,38 @@ export function formatDate(iso: string): string {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+const THAI_MONTHS = [
+  'มกราคม',
+  'กุมภาพันธ์',
+  'มีนาคม',
+  'เมษายน',
+  'พฤษภาคม',
+  'มิถุนายน',
+  'กรกฎาคม',
+  'สิงหาคม',
+  'กันยายน',
+  'ตุลาคม',
+  'พฤศจิกายน',
+  'ธันวาคม',
+] as const;
+
+/** Years between the Buddhist Era and the Gregorian calendar. */
+const BUDDHIST_ERA_OFFSET = 543;
+
+/**
+ * Formats a date in Thai with a Buddhist Era year: `16 ตุลาคม 2569`.
+ *
+ * Month names are held as literal strings rather than delegated to
+ * `Intl`/`toLocaleDateString('th-TH-u-ca-buddhist')` because Hermes ships
+ * without full ICU data on some platforms — an Intl version would look correct
+ * on web while silently falling back to Gregorian + English on device.
+ */
+export function formatThaiDate(date: Date): string {
+  if (Number.isNaN(date.getTime())) return '';
+  const month = THAI_MONTHS[date.getMonth()];
+  return `${date.getDate()} ${month} ${date.getFullYear() + BUDDHIST_ERA_OFFSET}`;
+}
+
 /** Relative "3 Days ago" style label. */
 export function formatRelativeDays(daysAgo: number): string {
   if (daysAgo <= 0) return 'Today';
