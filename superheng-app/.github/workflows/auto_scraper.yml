@@ -1,0 +1,106 @@
+name: Auto Scraper
+
+# Keep the Supabase `lottery_draws` ledger current after every GLO draw.
+#
+# GLO draws at 16:00 Asia/Bangkok on the 1st and 16th. This job fires at 10:30 UTC
+# (17:30 BKK) — 90 minutes later, so the result is published and the archive page
+# has settled — and also on the 2nd and 17th, because GLO moves a draw by a day in
+# some months (2 Jan, 17 Jan, 2 May) and a site can publish late.
+#
+# Re-running is harmless by design: the ingestion upserts on `draw_date`, so a
+# second pass rewrites the same rows rather than duplicating them. That is also
+# why the extra days cost nothing but a few requests.
+on:
+  schedule:
+    # 10:30 UTC = 17:30 Asia/Bangkok (UTC+7), ~90 min after the 16:00 draw.
+    - cron: "30 10 1,2,16,17 * *"
+  workflow_dispatch: {}
+
+# The job only reads the repository and writes to Supabase over HTTPS.
+permissions:
+  contents: read
+
+# Never let two ingestions overlap. Without this, a manual dispatch during a
+# scheduled run would race the same upsert against itself.
+concurrency:
+  group: auto-scraper
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    name: Scrape draws into Supabase
+    runs-on: ubuntu-latest
+    # A full 10-year re-scrape is ~13 requests; anything approaching this bound
+    # means the runner is stuck, and a stuck job must not hold the concurrency
+    # lock into the next draw day.
+    timeout-minutes: 30
+
+    env:
+      # Read by backend/scraper.py through os.getenv. Values are never printed:
+      # the credentials come from repository secrets, so they stay out of the logs
+      # and out of the checkout.
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
+
+      - name: Verify the Supabase credentials are configured
+        # Fail with a clear message instead of letting the scraper discover the
+        # problem, and check only for *presence* — the values are never echoed.
+        run: |
+          missing=0
+          for name in SUPABASE_URL SUPABASE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set. Add it under Settings > Secrets and variables > Actions."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Both Supabase secrets are present."
+
+      - name: Run the scraper
+        # Invoked from the repository root, exactly as documented in scraper.py's
+        # usage block: `backend/` goes on sys.path by virtue of being the script's
+        # directory, so `import data_ingestion` resolves without any packaging.
+        #
+        # This performs a 10-year backfill and upserts the result, which keeps
+        # recent corrections flowing in and needs no `--fill-gaps` (that is for
+        # deep historical backfills; the routine path has no gaps to look for).
+        # The script exits non-zero when it collects nothing, so a broken source
+        # fails the job rather than silently reporting success.
+        run: python backend/scraper.py
+
+      - name: Verify the ledger actually received the data
+        # A zero exit from the scraper only proves it *sent* rows. This step reads
+        # the table back, which is the only way to catch the failures that hide
+        # behind a green scrape: credentials that authenticate but resolve to
+        # another project, a write accepted and discarded by row-level security,
+        # or a source that stopped publishing while the archive walk still
+        # succeeded against stale pages.
+        #
+        # It fails the job on an EMPTY ledger (the explicit case this exists for),
+        # on a ledger that has stopped advancing (nothing new for 45 days — two
+        # whole draw cycles, so it does not fire on a merely late result), and on a
+        # malformed newest row. It deliberately does NOT require new rows every
+        # run: upserting on draw_date means a second pass on the same day is
+        # expected to add none.
+        #
+        # Placement matters — this runs after the write, while the credentials are
+        # still in the environment, and before the job can be reported as passing.
+        run: python backend/verify_ingestion.py
