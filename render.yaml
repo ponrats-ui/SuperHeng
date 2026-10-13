@@ -27,9 +27,16 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     # Render's own readiness probe (GET, expects 2xx/3xx within 5s) and the
     # signal it uses to decide whether a deploy is good enough to receive
-    # traffic. /api/health reports FastAPI status plus Supabase reachability, so
-    # a broken credential pair fails the deploy instead of the first user
-    # request.
+    # traffic. It proves the process booted and can answer — NOT that the
+    # database credentials work. /api/health always answers 200 and reports
+    # `"supabase": "configured"` or `"not_configured"`, which is whether the
+    # two variables are *present*, not whether they are valid; it never queries
+    # the database. So a wrong-but-non-empty pair deploys green and then returns
+    # 500 on every data endpoint. Measured, not assumed: the first deploy of
+    # this service went Live with a SUPABASE_URL carrying a `/rest/v1` suffix.
+    # After any change to the credentials, prove them with a query:
+    #
+    #   curl -s "https://superheng-api.onrender.com/api/latest-draws?limit=1"
     healthCheckPath: /api/health
     # `autoDeploy` is deprecated in favour of `autoDeployTrigger`. `commit`
     # means every push to the tracked branch ships automatically; switch to
@@ -81,6 +88,12 @@ services:
       # text. Set them from Supabase -> Project Settings -> Data API / API Keys.
       # The backend only reads draws, so the `anon` key is enough; it never
       # needs the RLS-bypassing `service_role` key.
+      # The BARE project URL — https://<project-ref>.supabase.co — with no path,
+      # no trailing slash and no trailing newline. The Data API page displays it
+      # with `/rest/v1` on the end; the client appends that itself, so pasting
+      # it yields `/rest/v1/rest/v1/...`, PostgREST answers 404 and every query
+      # fails with PGRST125 "Invalid path specified in request URL" — while
+      # /api/health still reports "configured".
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY

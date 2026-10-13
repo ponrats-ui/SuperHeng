@@ -65,7 +65,12 @@ already git-ignored, and `dist/` is too, so build output stays out of Git.
 4. Render shows one service, `superheng-api`, and asks for the two variables
    marked `sync: false` in the Blueprint. Fill them in from
    **Supabase → Project Settings → Data API / API Keys**:
-   - `SUPABASE_URL` — `https://<project-ref>.supabase.co`
+   - `SUPABASE_URL` — the **bare** project URL, `https://<project-ref>.supabase.co`.
+     The Data API page displays it with `/rest/v1` on the end; do not paste that
+     path. The client appends `/rest/v1` itself, so the suffix produces
+     `/rest/v1/rest/v1/lottery_draws`, a 404 from PostgREST and `PGRST125` from
+     every query — while `/api/health` still reports `"configured"`. Strip any
+     trailing slash or newline that comes with a copy-paste too.
    - `SUPABASE_KEY` — the **anon** key is enough. The API only reads draws, and
      the schema's RLS policy allows exactly that. Do not paste the
      `service_role` key: it bypasses RLS and is only needed by the ingestion
@@ -78,9 +83,22 @@ already git-ignored, and `dist/` is too, so build output stays out of Git.
 curl -s https://superheng-api.onrender.com/api/health
 ```
 
-Expect HTTP 200, `"status": "ok"`, and the Supabase dependency reported as
-reachable. Render uses this same endpoint as its health check, so a deploy with a
-bad database credential fails here rather than on a user's first request.
+Expect HTTP 200 and `"supabase": "configured"`.
+
+**That 200 does not mean the credentials work.** `/api/health` always answers 200
+and reports only whether the two variables are *present*; it never queries the
+database. Render uses this same endpoint as its health check, so a service whose
+credentials are wrong still deploys green and then returns `500` on every data
+endpoint — which is exactly what the first deploy of this service did. Prove the
+credential pair with a query instead:
+
+```bash
+curl -s "https://superheng-api.onrender.com/api/latest-draws?limit=1"
+```
+
+A JSON array of draws means the database is genuinely reachable. A `500` carrying
+`PGRST125` ("Invalid path specified in request URL") means `SUPABASE_URL` was
+pasted with a path on the end — see the `SUPABASE_URL` note in step 4 above.
 
 ### Same thing by hand (no Blueprint)
 
