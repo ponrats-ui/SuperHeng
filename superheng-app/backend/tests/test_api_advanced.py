@@ -89,8 +89,10 @@ def test_health_reports_the_models_as_available(client: TestClient):
         "markov",
         "timeseries",
         "montecarlo",
+        "bayesian_positional",
     ]
     assert payload["models"]["endpoints"]["advanced"] == "/api/predict/advanced"
+    assert payload["models"]["endpoints"]["premium"] == "/api/predict/premium"
 
 
 def test_response_carries_the_documented_top_level_fields(client: TestClient):

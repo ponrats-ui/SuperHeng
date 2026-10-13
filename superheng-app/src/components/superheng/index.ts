@@ -7,6 +7,7 @@ export * from './heatmap';
 export * from './locked-panel';
 export * from './modal-scaffold';
 export * from './page-scaffold';
+export * from './premium-insights';
 export * from './probability-bar';
 export * from './radar-chart';
 export * from './rank-row';

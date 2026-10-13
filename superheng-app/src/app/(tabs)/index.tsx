@@ -7,8 +7,8 @@ import {
   Card,
   Countdown,
   HeaderIconButton,
-  LockedPanel,
   PageScaffold,
+  PremiumInsightsPanel,
   RankRow,
   ScoreRing,
   SectionHeader,
@@ -64,27 +64,6 @@ const TONE_VERDICT: Record<SignalTone, string> = {
   low: 'Weak signal',
   cold: 'No meaningful signal',
 };
-
-/**
- * Premium tiers shown as locked teasers on the dashboard.
- *
- * `digits` only sizes the masked preview — no placeholder numbers are shown, so
- * a locked tier can never be mistaken for a real prediction.
- */
-const LOCKED_TIERS = [
-  {
-    badge: '3-DIGIT',
-    title: '3 ตัว',
-    subtitle: 'วิเคราะห์เลขท้าย 3 ตัว รายตำแหน่ง พร้อมอันดับและคะแนน Heng',
-    digits: 3,
-  },
-  {
-    badge: '6-DIGIT',
-    title: 'รางวัลที่ 1',
-    subtitle: 'วิเคราะห์เลข 6 ตัว (รางวัลที่ 1) ด้วยโมเดลขั้นสูง',
-    digits: 6,
-  },
-] as const;
 
 export default function DashboardScreen() {
   const { colors } = useAppTheme();
@@ -410,34 +389,27 @@ export default function DashboardScreen() {
       ) : null}
 
       {/*
-        Premium teasers. Purely presentational — the lock is a sales surface, not
-        an access control, so anything genuinely premium must be gated on the
-        server when Phase 2 lands.
+        Premium insights — Bayesian positional model over the 6-digit first
+        prize, rendered live.
+
+        FOUNDER MODE: the lock is intentionally removed so the math and layout
+        can be tested on device. The badge is honest about that — this is not a
+        paid tier yet, and the real gate will be a server-side entitlement check,
+        never a client flag.
       */}
       <Card>
         <SectionHeader
           title="Premium insights"
-          subtitle="วิเคราะห์เจาะลึกเลข 3 ตัว และ 6 ตัว"
+          subtitle="Bayesian positional model · รางวัลที่ 1"
           action={
             <View style={[styles.premiumPill, { borderColor: `${colors.gold}80` }]}>
               <ThemedText type="small" style={[styles.premiumPillText, { color: colors.accent }]}>
-                🔒 LOCKED
+                ✨ FOUNDER MODE
               </ThemedText>
             </View>
           }
         />
-        <View style={styles.premiumList}>
-          {LOCKED_TIERS.map((tier) => (
-            <LockedPanel
-              key={tier.badge}
-              badge={tier.badge}
-              title={tier.title}
-              subtitle={tier.subtitle}
-              digits={tier.digits}
-              onPress={() => router.push('/premium')}
-            />
-          ))}
-        </View>
+        <PremiumInsightsPanel />
       </Card>
 
       {/*
@@ -856,11 +828,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.8,
   },
-  premiumList: {
-    gap: Spacing.three,
-    marginTop: Spacing.three,
-  },
-
   // Ensemble -------------------------------------------------------------
   chips: {
     flexDirection: 'row',

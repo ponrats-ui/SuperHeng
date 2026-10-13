@@ -18,6 +18,8 @@ Endpoints
 ``GET /api/predict/basic`` Frequency + Markov Chain -> ranked 2-digit picks
 ``GET /api/predict/advanced`` Frequency + Markov + ARIMA + Monte Carlo -> the
                           weighted ensemble Heng Score
+``GET /api/predict/premium`` Bayesian positional posteriors for the 4 lower
+                          digits of the 6-digit first prize (Premium tier)
 
 Design notes
 ------------
@@ -276,10 +278,17 @@ async def health() -> dict[str, Any]:
         # distinguish "no models yet" from "model service is down".
         "models": {
             "status": "implemented",
-            "available": ["frequency", "markov", "timeseries", "montecarlo"],
+            "available": [
+                "frequency",
+                "markov",
+                "timeseries",
+                "montecarlo",
+                "bayesian_positional",
+            ],
             "endpoints": {
                 "basic": "/api/predict/basic",
                 "advanced": "/api/predict/advanced",
+                "premium": "/api/predict/premium",
             },
         },
     }
@@ -537,6 +546,88 @@ async def predict_advanced(
         simulations,
         seed,
         top_k,
+    )
+    return result
+
+
+@app.get(
+    "/api/predict/premium",
+    tags=["predict"],
+    summary="Bayesian positional posteriors for the 4 lower digits of รางวัลที่ 1",
+    response_description=(
+        "Top 3 digits per position (thousands, hundreds, tens, units), each with a "
+        "posterior probability (0.0-1.0) and a math-derived reason"
+    ),
+)
+async def predict_premium(
+    limit: int = Query(
+        DEFAULT_HISTORY_LIMIT,
+        ge=2,
+        le=MAX_HISTORY_LIMIT,
+        description=(
+            "How many recent draws to analyse "
+            f"(2-{MAX_HISTORY_LIMIT}, default {DEFAULT_HISTORY_LIMIT} = the whole ledger)."
+        ),
+    ),
+) -> dict[str, Any]:
+    """Premium tier: a per-position Bayesian model of the 6-digit first prize.
+
+    For each of the four modelled positions — ``thousands``, ``hundreds``,
+    ``tens`` and ``units`` (the 3rd–6th digits from the right) — this returns the
+    **top 3** digits with their posterior probability (0.0-1.0) and a reason
+    assembled from the computed counts.
+
+    Two probabilities drive each pick, and the difference between them is the
+    Premium feature:
+
+    * the **marginal** ``P(digit | position)`` — the historical occurrence
+      probability, under a uniform Dirichlet prior;
+    * the **conditional** ``P(digit | position, higher-digit = x)`` given the
+      latest draw's adjacent higher digit, shrinking each row toward the marginal.
+      A position ranks on the conditional when that state has enough support, and
+      falls back to the marginal (saying so) when it does not.
+
+    The response also carries ``distribution`` — the full posterior it ranked on,
+    all ten digits — so the client can draw the whole bar rather than only the top
+    three.
+
+    **Insufficient data is not an error.** An empty or thin ledger returns HTTP 200
+    with ``status`` set to ``limited`` or ``insufficient_data`` and every
+    limitation in ``warnings``; a 500 means the computation itself broke.
+
+    The model is intentionally pure over its inputs: the rows are fetched here, by
+    the endpoint, from the one shared Supabase client, exactly as the basic and
+    advanced endpoints do — so the model stays unit-testable without a database.
+    """
+    # Imported here, not at module scope, so importing `main` never pulls in the
+    # model stack — the same reasoning as the advanced endpoint's lazy import.
+    from models.bayesian import analyse_positions
+
+    client = get_supabase()
+
+    try:
+        rows = fetch_draw_history(client, limit)
+    except Exception as exc:  # noqa: BLE001 - translated into an HTTP response
+        log.exception("Draw history query failed (premium).")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch draw history from '{DRAWS_TABLE}': {exc}",
+        ) from exc
+
+    try:
+        result = analyse_positions(rows)
+    except Exception as exc:  # noqa: BLE001 - a model bug must not look like bad input
+        log.exception("Premium prediction failed after fetching %d row(s).", len(rows))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to compute premium predictions: {exc}",
+        ) from exc
+
+    log.info(
+        "predict/premium: status=%s draws=%d (limit=%d)",
+        result.get("status"),
+        result.get("draws_analyzed", 0),
+        limit,
     )
     return result
 
