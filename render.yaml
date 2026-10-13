@@ -1,0 +1,87 @@
+# Render Blueprint for the SuperHeng backend (FastAPI).
+#
+# Render reads this file from the repository root — Dashboard -> New ->
+# Blueprint -> connect `ponrats-ui/SuperHeng`. It does not have to live at the
+# root (the dashboard accepts a custom Blueprint Path), but root is the default
+# and the least surprising place for it.
+#
+# The blueprint declares ONE web service. Supabase is an external managed
+# Postgres, so there is no `databases:` block: nothing here provisions a
+# database, it only supplies the credentials the app already expects.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: superheng-api
+    runtime: python
+    plan: free
+    # The API lives in a subdirectory of the repo. `rootDir` is what makes the
+    # monorepo layout work: both commands below run *inside* it, and that is the
+    # directory Render treats as the project root when resolving requirements.txt.
+    rootDir: superheng-app/backend
+    # REQUIRED for a non-Docker service — Render does not install Python
+    # dependencies on its own. Every pinned package resolves to a prebuilt
+    # manylinux wheel, so this build compiles nothing.
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    # Render's own readiness probe (GET, expects 2xx/3xx within 5s) and the
+    # signal it uses to decide whether a deploy is good enough to receive
+    # traffic. /api/health reports FastAPI status plus Supabase reachability, so
+    # a broken credential pair fails the deploy instead of the first user
+    # request.
+    healthCheckPath: /api/health
+    # `autoDeploy` is deprecated in favour of `autoDeployTrigger`. `commit`
+    # means every push to the tracked branch ships automatically; switch to
+    # `checksPass` once CI exists.
+    autoDeployTrigger: commit
+    envVars:
+      # Fully qualified version (Render requires the patch for PYTHON_VERSION).
+      # 3.14.3 is Render's default for services created on or after 2026-02-11,
+      # so it is guaranteed present on the build image, and it matches the 3.14
+      # line the dependency wheels and the test suite were verified against.
+      - key: PYTHON_VERSION
+        value: "3.14.3"
+      # Unbuffered stdout so `print`/logging output reaches the Render log stream
+      # immediately instead of sitting in a 4 KiB block buffer.
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      # --- CORS (beta settings) --------------------------------------------
+      # BETA: every origin is allowed. This is the deliberate, temporary choice
+      # for a beta — the Expo dev server, any Pages preview URL, a custom domain
+      # and the native app all work with no further configuration, so nothing
+      # about the beta depends on CORS being right yet.
+      #
+      # Quoted because a bare `*` is a YAML alias, not a string.
+      - key: CORS_ORIGINS
+        value: "*"
+      # BETA: also advertise that credentials are permitted. Measured against
+      # Starlette 1.7.0: this does NOT emit the invalid `*` + credentials pair.
+      # Starlette reflects the caller's origin instead, so requests keep
+      # working. It is inert for this API (it authenticates with a header, not
+      # cookies), but it does mean any origin is invited to send credentials —
+      # so it must be turned off before any cookie-based session exists.
+      - key: CORS_ALLOW_CREDENTIALS
+        value: "true"
+      # --- CORS (BEFORE LAUNCH: replace the two lines above with these) -----
+      #   - key: CORS_ORIGINS
+      #     value: https://superheng.pages.dev
+      #   - key: CORS_ORIGIN_REGEX
+      #     value: '^https://([a-z0-9-]+\.)?superheng\.pages\.dev$'
+      # and delete CORS_ALLOW_CREDENTIALS.
+      #
+      # The regex is what keeps *preview* deployments working: Cloudflare gives
+      # each preview build a fresh `<hash>.<project>.pages.dev` host and moves
+      # the branch alias between builds, so an exact-match list alone cannot
+      # cover them. Quoted with single quotes because YAML double quotes would
+      # treat `\.` as an invalid escape.
+      # --- Secrets: not stored in Git -------------------------------------
+      # `sync: false` makes Render prompt for these in the dashboard and keeps
+      # whatever is entered there; a `value:` here would be committed in plain
+      # text. Set them from Supabase -> Project Settings -> Data API / API Keys.
+      # The backend only reads draws, so the `anon` key is enough; it never
+      # needs the RLS-bypassing `service_role` key.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false

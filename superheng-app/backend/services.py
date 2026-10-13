@@ -99,6 +99,47 @@ LIFT_LOW = 1.2
 
 TOP_N = 5
 
+# ---------------------------------------------------------------------------
+# The four advertised models, and their status in a response
+# ---------------------------------------------------------------------------
+# "Transparency as a feature": a model is never absent from a payload. Every
+# recommendation carries all four, and each one is either `active` (it
+# contributed a measured value to the score being published) or `neutral` (it
+# did not), together with the applied weight and a machine-readable reason. A
+# dropped signal is therefore visible as a labelled absence instead of a silent
+# one — which is the failure mode this exists to prevent.
+#
+# The keys match `models.ensemble.DEFAULT_WEIGHTS`, so a weight lookup and a
+# status lookup name the same model.
+MODEL_KEYS: tuple[str, ...] = ("frequency", "markov", "timeseries", "montecarlo")
+
+MODEL_LABELS: dict[str, str] = {
+    "frequency": "Frequency",
+    "markov": "Markov",
+    "timeseries": "ARIMA",
+    "montecarlo": "Monte Carlo",
+}
+
+# Only two states, deliberately. A tri-state would invite a client to render
+# "unknown" and move on; two states force every omission to be explained.
+STATUS_ACTIVE = "active"
+STATUS_NEUTRAL = "neutral"
+
+# Why a model is neutral. Machine-readable so the client styles and labels the
+# chip without parsing prose, and exhaustive so no omission is unlabelled.
+REASON_APPLIED = "applied"
+REASON_WEIGHTED_ZERO = "weighted_zero"
+REASON_INSUFFICIENT_SUPPORT = "insufficient_support"
+REASON_NOT_IN_BLEND = "not_in_blend"
+REASON_NO_OBSERVED_TRANSITION = "no_observed_transition"
+REASON_NO_ARIMA_FIT = "no_arima_fit"
+REASON_NOT_REPORTED = "not_reported"
+
+MODEL_NOT_REPORTED_DETAIL = (
+    "This model's status was not reported for this pick, so it is shown as "
+    "neutral. Treat the score as if it did not contribute."
+)
+
 METHODOLOGY_NOTE = (
     "The Heng Score measures model agreement about historical behaviour, on a "
     "0-100 scale. It is not a probability of winning: a fair draw is "
@@ -519,6 +560,156 @@ def effective_weights(
     return {name: weight / total for name, weight in kept.items()}
 
 
+def model_entry(
+    status: str, *, weight: float, reason: str, detail: str
+) -> dict[str, Any]:
+    """One model's status. Always carries a weight and a reason, never a bare flag."""
+    return {
+        "status": status,
+        "weight": round(float(weight), 4),
+        "reason": reason,
+        "detail": detail,
+    }
+
+
+def build_model_statuses(
+    entries: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Complete a status map to all four models, in display order.
+
+    Anything the caller did not describe is filled in as ``neutral`` /
+    ``not_reported`` rather than omitted. That is the entire contract: a model
+    missing from the response is indistinguishable from one the backend forgot
+    to consider, so the response never omits one.
+    """
+    return {
+        key: {
+            "label": MODEL_LABELS[key],
+            **dict(
+                entries.get(key)
+                or model_entry(
+                    STATUS_NEUTRAL,
+                    weight=0.0,
+                    reason=REASON_NOT_REPORTED,
+                    detail=MODEL_NOT_REPORTED_DETAIL,
+                )
+            ),
+        }
+        for key in MODEL_KEYS
+    }
+
+
+def blend_model_statuses(
+    *,
+    applied: Mapping[str, float],
+    available: Sequence[str],
+    configured: Mapping[str, float],
+    draws: int,
+    in_blend: Sequence[str] = MODEL_KEYS,
+    scope: str = "this blend",
+    notes: Mapping[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Describe all four models for one channel-level blend.
+
+    ``applied`` is the renormalised weight map that actually produced the score,
+    ``available`` names the models that produced a value at all, and
+    ``in_blend`` names the models this blend is allowed to use — the Day 3
+    endpoint is a two-model blend, so its ARIMA and Monte Carlo chips are
+    ``not_in_blend`` rather than silently missing. ``scope`` names that blend in
+    the sentence a reader sees.
+
+    Below :data:`MIN_DRAWS_ANY` draws every model is reported neutral, whatever
+    arithmetic the blend went on to perform: the blend still produces a series
+    (all-zero counts, a uniform simulation), and calling that series a
+    contribution would put a confident weight on a model that had no data. That
+    is the false precision the floors exist to prevent.
+
+    ``notes`` overrides the default wording per model, so a caller can quote the
+    measured reason (the Markov support, ARIMA's own note) instead of a generic
+    sentence.
+    """
+    if draws < MIN_DRAWS_ANY:
+        return build_model_statuses(
+            {
+                key: model_entry(
+                    STATUS_NEUTRAL,
+                    weight=0.0,
+                    reason=REASON_INSUFFICIENT_SUPPORT,
+                    detail=(
+                        f"{MODEL_LABELS[key]} was not scored: {draws} usable "
+                        f"draw(s) is below the {MIN_DRAWS_ANY} needed before "
+                        "anything is estimable."
+                    ),
+                )
+                for key in MODEL_KEYS
+            }
+        )
+
+    notes = dict(notes or {})
+    entries: dict[str, dict[str, Any]] = {}
+    for key in MODEL_KEYS:
+        label = MODEL_LABELS[key]
+        weight = float(applied.get(key, 0.0))
+        if weight > 0:
+            entries[key] = model_entry(
+                STATUS_ACTIVE,
+                weight=weight,
+                reason=REASON_APPLIED,
+                detail=notes.get(
+                    key, f"{label} contributed {weight:.0%} of the published blend."
+                ),
+            )
+        elif key not in in_blend or key not in configured:
+            entries[key] = model_entry(
+                STATUS_NEUTRAL,
+                weight=0.0,
+                reason=REASON_NOT_IN_BLEND,
+                detail=notes.get(key, f"{label} is not part of {scope}."),
+            )
+        elif key not in available:
+            entries[key] = model_entry(
+                STATUS_NEUTRAL,
+                weight=0.0,
+                reason=REASON_INSUFFICIENT_SUPPORT,
+                detail=notes.get(
+                    key, f"{label} produced no usable estimate for this channel."
+                ),
+            )
+        else:
+            # It had a value and it was in the blend, yet carries no weight: the
+            # caller configured it away.
+            entries[key] = model_entry(
+                STATUS_NEUTRAL,
+                weight=0.0,
+                reason=REASON_WEIGHTED_ZERO,
+                detail=notes.get(
+                    key,
+                    f"{label} was configured to zero weight "
+                    f"(configured {float(configured.get(key, 0.0)):.0%}) and was "
+                    "redistributed across the remaining models.",
+                ),
+            )
+    return build_model_statuses(entries)
+
+
+def refine_model_statuses(
+    statuses: Mapping[str, Mapping[str, Any]],
+    overrides: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Narrow a channel's statuses to one pick's, keeping all four models.
+
+    A model can be active for the channel and still hold no measured value for
+    *this* code: an ARIMA series that was never fitted, a Markov transition that
+    was never observed. Those are exactly the cases this feature exists to
+    surface, so the override replaces the channel-level entry rather than being
+    averaged away. ``label`` from the channel entry is preserved.
+    """
+    return {
+        key: {**dict(statuses[key]), **dict(overrides[key])} if key in overrides else dict(statuses[key])
+        for key in MODEL_KEYS
+    }
+
+
 @dataclass
 class ChannelResult:
     channel: str
@@ -528,6 +719,7 @@ class ChannelResult:
     frequencies: list[FrequencyRow]
     markov: MarkovResult
     rankings: list[dict[str, Any]]
+    model_statuses: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -538,6 +730,7 @@ class ChannelResult:
             "weights": {k: round(v, 4) for k, v in self.weights.items()},
             "frequencies": [row.as_dict() for row in self.frequencies],
             "markov": self.markov.as_dict(),
+            "model_statuses": self.model_statuses,
             "rankings": self.rankings,
         }
 
@@ -616,6 +809,27 @@ def score_channel(
     usable = [name for name in configured if name in signals]
     applied = effective_weights(warnings, channel, usable, configured)
 
+    # Day 3 is a two-model blend, so the other two advertised models are reported
+    # as `not_in_blend` rather than omitted. A response that lists only what it
+    # used cannot be audited for what it skipped.
+    markov_notes: dict[str, str] = {}
+    if "markov" not in signals:
+        markov_notes["markov"] = (
+            f"No Markov estimate after {state}: {markov.support} observed "
+            f"transition(s), below the floor of {MIN_MARKOV_SUPPORT}."
+            if state
+            else "No Markov estimate: the series is empty."
+        )
+    channel_statuses = blend_model_statuses(
+        applied=applied,
+        available=list(signals),
+        configured=configured,
+        draws=draws,
+        in_blend=("frequency", "markov"),
+        scope="this endpoint's two-model Frequency + Markov blend",
+        notes=markov_notes,
+    )
+
     normalised = {name: rank_normalise(signals[name]) for name in usable}
 
     # Raw probability estimates, blended only over available signals. Both are
@@ -643,6 +857,24 @@ def score_channel(
             frequency_row = frequency_by_code[code]
             markov_row = markov_by_code.get(code)
 
+            # The Markov model can be active for the channel and still hold no
+            # measured value for this code: the transition was never observed,
+            # so its entry here is the add-k prior. Saying so is the difference
+            # between "the model looked and found nothing" and "the model ran
+            # and prefers this code".
+            overrides: dict[str, dict[str, Any]] = {}
+            if "markov" in applied and markov_row is not None and markov_row.count == 0:
+                overrides["markov"] = model_entry(
+                    STATUS_NEUTRAL,
+                    weight=0.0,
+                    reason=REASON_NO_OBSERVED_TRANSITION,
+                    detail=(
+                        f"No transition from {state} into {code} was observed, so "
+                        f"this code's Markov entry is the add-{smoothing:g} smoothed "
+                        "prior rather than measured evidence."
+                    ),
+                )
+
             rankings.append(
                 {
                     # --- RankEntry contract (src/data/mock.ts) -----------------
@@ -659,6 +891,7 @@ def score_channel(
                     "reason": build_reason(
                         frequency_row, markov_row, markov.usable, state, channel
                     ),
+                    "model_statuses": refine_model_statuses(channel_statuses, overrides),
                     "evidence": {
                         "frequency": frequency_row.as_dict(),
                         "markov": markov_row.as_dict() if markov_row else None,
@@ -698,6 +931,7 @@ def score_channel(
         frequencies=top_frequency(series, top_n),
         markov=markov,
         rankings=rankings[:top_n],
+        model_statuses=channel_statuses,
     )
 
 

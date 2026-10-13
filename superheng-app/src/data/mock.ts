@@ -15,6 +15,55 @@ import { DRAW_SCHEDULE } from '@/lib/draw';
 
 export type Confidence = 'High' | 'Medium' | 'Low';
 
+/**
+ * The four models the product advertises, in the order a payload lists them.
+ *
+ * Mirrors `MODEL_KEYS` in `backend/services.py`. A model is **never absent** from
+ * a response: it is either `active` (it contributed a measured value to the
+ * score being shown) or `neutral` (it was skipped), with the reason attached.
+ * That is what lets the UI say "this model looked and found nothing" instead of
+ * quietly dropping it.
+ */
+export const MODEL_KEYS = ['frequency', 'markov', 'timeseries', 'montecarlo'] as const;
+
+export type ModelKey = (typeof MODEL_KEYS)[number];
+
+/** Full display names, keyed like the backend's `MODEL_LABELS`. */
+export const MODEL_LABELS: Record<ModelKey, string> = {
+  frequency: 'Frequency',
+  markov: 'Markov',
+  timeseries: 'ARIMA',
+  montecarlo: 'Monte Carlo',
+};
+
+/** Chip-face abbreviations, so four badges fit on one line on a phone. */
+export const MODEL_SHORT_LABELS: Record<ModelKey, string> = {
+  frequency: 'Freq',
+  markov: 'Markov',
+  timeseries: 'ARIMA',
+  montecarlo: 'MC',
+};
+
+export type ModelStatusValue = 'active' | 'neutral';
+
+/** One model's state for one pick, or for one channel's blend. */
+export type ModelStatus = {
+  /** Which model — derived from the payload key, so it can never be mislabelled. */
+  key: ModelKey;
+  label: string;
+  status: ModelStatusValue;
+  /** The weight actually applied. 0 for a neutral model. */
+  weight: number;
+  /**
+   * Machine-readable reason: `applied`, `weighted_zero`,
+   * `insufficient_support`, `not_in_blend`, `no_observed_transition`,
+   * `no_arima_fit`, `not_reported`.
+   */
+  reason: string;
+  /** The measured explanation, safe to show verbatim. */
+  detail: string;
+};
+
 export type RankEntry = {
   /** 2-digit code, e.g. "48". */
   code: string;
@@ -32,6 +81,12 @@ export type RankEntry = {
    * it; the live `/api/predict/basic` payload always supplies one.
    */
   reason?: string;
+  /**
+   * All four models with their status for *this* code. Optional for the same
+   * reason as `reason`: the mock fixtures predate it, so an entry without one
+   * renders no chips rather than inventing them.
+   */
+  modelStatuses?: ModelStatus[];
 };
 
 export type TopPick = {

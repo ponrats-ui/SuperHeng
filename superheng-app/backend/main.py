@@ -236,23 +236,92 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # CORS
 # ---------------------------------------------------------------------------
-# DEVELOPMENT ONLY: `allow_origins=["*"]` lets any browser origin call the API.
-# It exists so the Expo dev server (web target on :8081, and whichever LAN
-# origin the phone uses) can talk to the API without churn.
+# Allowed browser origins are read from the environment so one deployment can
+# serve local development and the hosted frontend without a code change:
 #
-# `allow_credentials` MUST stay False while the origin list is "*". The CORS
-# spec forbids pairing the wildcard origin with credentials, and browsers
-# reject the resulting response outright, so enabling it here would break every
-# request rather than permit more of them. This API authenticates with a header
-# (the planned X-API-Key), not cookies, so nothing is lost.
+#   CORS_ORIGINS       comma-separated exact origins (scheme + host + port)
+#   CORS_ORIGIN_REGEX  optional regular expression, matched against the origin
+#
+# With neither set, the middleware falls back to the permissive `*` that local
+# development needs — the Expo web target on :8081 and whichever LAN origin a
+# physical phone reports. The beta deployment sets `*` explicitly too; see
+# ../render.yaml, which also documents the narrowed allow-list to use before
+# launch.
+#
+# CORS_ORIGIN_REGEX exists because a Pages *preview* deployment gets a fresh
+# `<hash>.<project>.pages.dev` host on every build, while the branch alias
+# (`<branch>.<project>.pages.dev`) moves between builds. One pattern covers the
+# production alias and every preview hash without redeploying the API:
+#
+#   ^https://([a-z0-9-]+\.)?superheng\.pages\.dev$
+#
+# `allow_credentials` is governed by CORS_ALLOW_CREDENTIALS and defaults to
+# False. The note below the constants records what actually happens when it is
+# turned on, because the widely repeated "a wildcard and credentials cannot
+# coexist" rule does not hold for Starlette — it was measured, not assumed.
 #
 # Two limits worth remembering: CORS is enforced by browsers only — curl, bots
 # and the native iOS/Android app are unaffected — so it is not an access
-# control. The Day 2 plan replaces this with an explicit origin allow-list.
+# control and must never be the only thing guarding an endpoint.
+def _cors_origins_from_env() -> list[str]:
+    """Parse `CORS_ORIGINS`, falling back to the permissive dev default.
+
+    Empty entries and a trailing comma are tolerated because this value is
+    pasted by hand into a dashboard, and a trailing slash is stripped because
+    an `Origin` header never carries one — a stray slash would silently stop
+    matching and show up in the browser only as a CORS failure.
+    """
+    raw = (os.getenv("CORS_ORIGINS") or "").strip()
+    origins = [origin.strip().rstrip("/") for origin in raw.split(",")]
+    return [origin for origin in origins if origin] or ["*"]
+
+
+def _cors_allow_credentials_from_env() -> bool:
+    """Parse `CORS_ALLOW_CREDENTIALS`, defaulting to False.
+
+    Read the warning below before turning this on. It is off by default because
+    enabling it has a cost and, for this API as it stands, buys nothing.
+    """
+    raw = (os.getenv("CORS_ALLOW_CREDENTIALS") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+CORS_ORIGINS = _cors_origins_from_env()
+CORS_ORIGIN_REGEX = (os.getenv("CORS_ORIGIN_REGEX") or "").strip() or None
+CORS_ALLOW_CREDENTIALS = _cors_allow_credentials_from_env()
+
+# ---------------------------------------------------------------------------
+# What `allow_credentials=True` actually does here — measured, not assumed
+# ---------------------------------------------------------------------------
+# The commonly repeated advice is that "*" cannot be combined with credentials
+# and that the browser rejects the response. That is a real rule, but Starlette
+# does not emit the combination: it measures the wildcard case and reflects the
+# requesting origin back instead. Verified on Starlette 1.7.0 with
+# `allow_origins=["*"]`:
+#
+#   allow_credentials=False -> access-control-allow-origin: *
+#   allow_credentials=True  -> access-control-allow-origin: <the caller's origin>
+#
+# So the pairing is not broken, and requests keep working. Understand what it
+# means, though: with a wildcard allow-list AND credentials, every origin on the
+# internet is reflected and told it may send credentials. The protection the
+# wildcard normally provides — browsers refuse to send cookies to "*" — is
+# exactly what this switch removes.
+#
+# For this API the switch is currently inert: it authenticates with a request
+# header (the planned X-API-Key), not cookies, so there is nothing for a
+# browser to attach. It is therefore left OFF by default and turned on only
+# where a beta explicitly asks for it (see ../render.yaml). Turn it back off —
+# and prefer CORS_ORIGINS/CORS_ORIGIN_REGEX over a wildcard — before any
+# cookie-based session is introduced, or any site will be able to act as a
+# logged-in user.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=CORS_ORIGINS,
+    # With a wildcard origin every caller is allowed anyway, so the regex is
+    # only doing work once CORS_ORIGINS is narrowed to a real allow-list.
+    allow_origin_regex=CORS_ORIGIN_REGEX,
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

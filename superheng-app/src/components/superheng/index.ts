@@ -6,6 +6,7 @@ export * from './header-icon-button';
 export * from './heatmap';
 export * from './locked-panel';
 export * from './modal-scaffold';
+export * from './model-status-chips';
 export * from './page-scaffold';
 export * from './premium-insights';
 export * from './probability-bar';

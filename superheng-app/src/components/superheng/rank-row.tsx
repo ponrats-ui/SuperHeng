@@ -1,5 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 
+import { ModelStatusChips } from '@/components/superheng/model-status-chips';
 import { ProbabilityBar } from '@/components/superheng/probability-bar';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing, probabilityColor } from '@/constants/theme';
@@ -25,6 +26,11 @@ export type RankRowProps = {
  *   rank-normalised, which is what makes a 2% pick visually distinct from a 1%
  *   one; feeding the raw probability into a 0-100 bar would render every row as
  *   the same empty stub and hide the ranking it exists to show.
+ *
+ * The model badges under the bar are the "transparency" layer: all four models
+ * appear on every pick, with the skipped ones greyed and their reason one tap
+ * away. A row with no `modelStatuses` (the mock fixtures, or a payload from
+ * before the field existed) simply renders without them.
  */
 export function RankRow({ rank, entry }: RankRowProps) {
   const { colors } = useAppTheme();
@@ -82,6 +88,8 @@ export function RankRow({ rank, entry }: RankRowProps) {
       </View>
 
       <ProbabilityBar value={entry.score} color={tone} height={5} />
+
+      <ModelStatusChips statuses={entry.modelStatuses} />
 
       {entry.reason ? (
         <ThemedText type="small" themeColor="textMuted" style={styles.reason}>

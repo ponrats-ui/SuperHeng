@@ -12,7 +12,7 @@
  * pools them.
  */
 
-import type { RankEntry, SignalTone } from '@/data/mock';
+import { MODEL_KEYS, MODEL_LABELS, type ModelKey, type ModelStatus, type RankEntry, type SignalTone } from '@/data/mock';
 
 // ---------------------------------------------------------------------------
 // Base URL
@@ -79,7 +79,16 @@ export type MarkovEvidence = {
   lift: number;
 };
 
-/** A single ranked candidate, as emitted inside `channels[x].rankings`. */
+/**
+ * A single ranked candidate, as emitted inside `channels[x].rankings`.
+ *
+ * `model_statuses` is the "transparency" field: every pick carries all four
+ * models, each `active` or `neutral`, so a model the backend skipped is visible
+ * as a labelled absence rather than missing from the payload. It is parsed
+ * defensively for the same reason `reason` is — an older backend (or the dev
+ * stub) simply omits it, and the UI then renders no chips instead of four
+ * invented ones.
+ */
 export type ApiRanking = {
   code: string;
   /** Blended per-draw probability 0-100. Uniform across 100 codes is 1.0. */
@@ -91,6 +100,8 @@ export type ApiRanking = {
   lastSeenDays: number | null;
   tone: SignalTone;
   reason: string;
+  /** Empty when the response predates the field. Never synthesised. */
+  modelStatuses: ModelStatus[];
   evidence: {
     frequency: FrequencyEvidence;
     /** `null` when the Markov row is unusable for this channel. */
@@ -118,6 +129,8 @@ export type ChannelPayload = {
   weights: Record<string, number>;
   frequencies: FrequencyEvidence[];
   markov: MarkovSummary;
+  /** The same four models at channel level: what this blend did and skipped. */
+  modelStatuses: ModelStatus[];
   rankings: ApiRanking[];
 };
 
@@ -297,12 +310,42 @@ function toMarkovEvidence(raw: unknown): MarkovEvidence | null {
   };
 }
 
+/**
+ * Reads a `model_statuses` object into a display-ordered list.
+ *
+ * The payload is keyed by model, but nothing guarantees a browser or Hermes
+ * preserves key insertion order, so the list is rebuilt in `MODEL_KEYS` order.
+ * A model the backend did not send is **skipped**, not defaulted: rendering an
+ * absent model as a confident "neutral" would invent a finding about a model
+ * that was never asked.
+ */
+function toModelStatuses(raw: unknown): ModelStatus[] {
+  const rows = asRecord(raw);
+  if (!rows) return [];
+
+  const statuses: ModelStatus[] = [];
+  for (const key of MODEL_KEYS) {
+    const row = asRecord(rows[key]);
+    if (!row) continue;
+    statuses.push({
+      key: key as ModelKey,
+      label: asString(row.label, MODEL_LABELS[key]),
+      status: row.status === 'active' ? 'active' : 'neutral',
+      weight: asNumber(row.weight),
+      reason: asString(row.reason, 'not_reported'),
+      detail: asString(row.detail),
+    });
+  }
+  return statuses;
+}
+
 function toApiRanking(raw: unknown): ApiRanking | null {
   const row = asRecord(raw);
   if (!row || typeof row.code !== 'string') return null;
   const evidence = asRecord(row.evidence) ?? {};
   return {
     code: row.code,
+    modelStatuses: toModelStatuses(row.model_statuses),
     probability: asNumber(row.probability),
     score: asNumber(row.score),
     delta: asNumber(row.delta),
@@ -341,6 +384,7 @@ function toChannel(raw: unknown): ChannelPayload | null {
         .map(toMarkovEvidence)
         .filter((row): row is MarkovEvidence => row !== null),
     },
+    modelStatuses: toModelStatuses(channel.model_statuses),
     rankings: channel.rankings
       .map(toApiRanking)
       .filter((row): row is ApiRanking => row !== null),
@@ -616,6 +660,7 @@ export function toRankEntry(ranking: ApiRanking): RankEntry {
     delta: ranking.delta,
     lastSeenDays: ranking.lastSeenDays,
     reason: ranking.reason,
+    modelStatuses: ranking.modelStatuses,
   };
 }
 

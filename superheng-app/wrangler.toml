@@ -1,0 +1,21 @@
+# Cloudflare Pages configuration for the SuperHeng web frontend.
+#
+# `wrangler pages deploy` and the Pages Git integration both read this file when
+# it sits in the project's Root directory. In the Cloudflare dashboard that Root
+# directory is set to `superheng-app` (the app is a subdirectory of the repo), so
+# this file belongs here — at `superheng-app/wrangler.toml` — and NOT at the
+# repository root.
+#
+# `name` MUST match the Pages project name. Rename one and you must rename the
+# other, otherwise `wrangler pages deploy` creates or targets the wrong project.
+name = "superheng"
+
+# Directory produced by `npm run build` (`expo export -p web`). Relative to this
+# file. That command writes a static HTML file per route, which is why no
+# `_redirects` SPA fallback is needed: this is a collection of static pages, not
+# a single-page app that needs every unknown path pointed back at index.html.
+pages_build_output_dir = "dist"
+
+# Pins the Workers/Pages runtime behaviour used when Cloudflare evaluates this
+# project. Bump deliberately, never automatically.
+compatibility_date = "2026-10-13"

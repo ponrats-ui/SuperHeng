@@ -518,3 +518,145 @@ def test_weight_profiles_are_normalised():
     weights = result["channels"]["top"]["weights"]
     assert sum(weights.values()) == pytest.approx(1.0)
     assert result["weights_configured"] == {"frequency": 0.3, "markov": 0.7}
+
+
+# ---------------------------------------------------------------------------
+# Model statuses — every model is reported, active or neutral
+# ---------------------------------------------------------------------------
+
+
+def statuses_of(pick: dict) -> dict:
+    return pick["model_statuses"]
+
+
+def test_the_status_map_is_completed_for_every_model():
+    """A model the caller said nothing about is still listed, as neutral."""
+    statuses = svc.build_model_statuses({})
+
+    assert list(statuses) == list(svc.MODEL_KEYS), "display order, and nothing missing"
+    for key, entry in statuses.items():
+        assert entry["label"] == svc.MODEL_LABELS[key]
+        assert entry["status"] == svc.STATUS_NEUTRAL
+        assert entry["reason"] == svc.REASON_NOT_REPORTED
+        assert entry["weight"] == 0.0
+        assert entry["detail"], "an omission is never unlabelled"
+
+
+def test_refining_for_one_pick_keeps_all_four_models_and_their_labels():
+    channel = svc.build_model_statuses(
+        {
+            "frequency": svc.model_entry(
+                svc.STATUS_ACTIVE, weight=0.5, reason=svc.REASON_APPLIED, detail="kept"
+            )
+        }
+    )
+    refined = svc.refine_model_statuses(
+        channel,
+        {
+            "markov": svc.model_entry(
+                svc.STATUS_NEUTRAL,
+                weight=0.0,
+                reason=svc.REASON_NO_OBSERVED_TRANSITION,
+                detail="replaced",
+            )
+        },
+    )
+
+    assert list(refined) == list(svc.MODEL_KEYS)
+    assert refined["frequency"]["status"] == svc.STATUS_ACTIVE
+    assert refined["frequency"]["detail"] == "kept"
+    # The override carries no label of its own, so the channel's is preserved.
+    assert refined["markov"]["label"] == svc.MODEL_LABELS["markov"]
+    assert refined["markov"]["detail"] == "replaced"
+
+
+def test_every_pick_reports_all_four_models_in_display_order():
+    result = svc.analyse_draws(rows_for(["07", "48"] * 20))
+
+    for pick in result["channels"]["top"]["rankings"]:
+        assert list(statuses_of(pick)) == list(svc.MODEL_KEYS)
+        for entry in statuses_of(pick).values():
+            assert entry["status"] in {svc.STATUS_ACTIVE, svc.STATUS_NEUTRAL}
+            assert entry["reason"]
+            assert entry["detail"]
+            assert entry["weight"] >= 0.0
+
+
+def test_the_two_model_blend_names_the_models_it_does_not_use():
+    """ARIMA and Monte Carlo are absent from Day 3's blend, not from its answer."""
+    result = svc.analyse_draws(rows_for(["07", "48"] * 20))
+
+    for pick in result["channels"]["top"]["rankings"]:
+        statuses = statuses_of(pick)
+        for key in ("timeseries", "montecarlo"):
+            assert statuses[key]["status"] == svc.STATUS_NEUTRAL
+            assert statuses[key]["reason"] == svc.REASON_NOT_IN_BLEND
+            assert "two-model" in statuses[key]["detail"]
+        # The two the blend really used are active, and carry their weight.
+        assert statuses["frequency"]["status"] == svc.STATUS_ACTIVE
+        assert statuses["frequency"]["weight"] == pytest.approx(0.5)
+
+
+def test_an_unsupported_markov_signal_is_neutral_not_absent():
+    """Support 1 is below the floor, so Markov is reported and marked neutral.
+
+    Five draws are enough to rank (> ``MIN_DRAWS_ANY``) while the current state
+    "48" still has a single known successor, which is the case the field has to
+    describe: a model that ran and could not estimate anything.
+    """
+    series = pd.Series(["07", "99", "48", "55", "48"], dtype="object")
+    result = svc.score_channel(series, "top")
+    assert result.draws == 5
+
+    markov = result.model_statuses["markov"]
+    assert markov["status"] == svc.STATUS_NEUTRAL
+    assert markov["reason"] == svc.REASON_INSUFFICIENT_SUPPORT
+    assert "below the floor" in markov["detail"]
+    # The model that did carry the blend is active with the whole weight.
+    assert result.model_statuses["frequency"]["status"] == svc.STATUS_ACTIVE
+    assert result.model_statuses["frequency"]["weight"] == pytest.approx(1.0)
+    assert result.weights == {"frequency": 1.0}, "and the blend itself is unchanged"
+
+
+def test_a_zero_weight_model_is_reported_as_neutral(alternating):
+    result = svc.score_channel(alternating, "top", weights={"frequency": 1.0, "markov": 0.0})
+
+    markov = result.model_statuses["markov"]
+    assert markov["status"] == svc.STATUS_NEUTRAL
+    assert markov["reason"] == svc.REASON_WEIGHTED_ZERO
+    assert "zero weight" in markov["detail"]
+    assert result.model_statuses["frequency"]["weight"] == pytest.approx(1.0)
+
+
+def test_a_code_with_no_observed_transition_is_neutral_for_markov(alternating):
+    """The distinction the field exists for: the model ran, and found nothing."""
+    result = svc.score_channel(alternating, "top")
+
+    observed = [pick for pick in result.rankings if pick["evidence"]["markov"]["count"] > 0]
+    unobserved = [pick for pick in result.rankings if pick["evidence"]["markov"]["count"] == 0]
+    assert observed and unobserved, "the fixture must produce both cases"
+
+    for pick in observed:
+        assert statuses_of(pick)["markov"]["status"] == svc.STATUS_ACTIVE
+    for pick in unobserved:
+        markov = statuses_of(pick)["markov"]
+        assert markov["status"] == svc.STATUS_NEUTRAL
+        assert markov["reason"] == svc.REASON_NO_OBSERVED_TRANSITION
+        assert markov["weight"] == 0.0, "no measured evidence, so no weight"
+        assert "smoothed prior" in markov["detail"]
+
+
+def test_the_channel_and_its_picks_report_the_same_blend():
+    result = svc.analyse_draws(rows_for(["07", "48"] * 20))
+    channel = result["channels"]["top"]
+
+    assert list(channel["model_statuses"]) == list(svc.MODEL_KEYS)
+    for key in svc.MODEL_KEYS:
+        # A pick can narrow the channel's status, never widen it.
+        assert channel["model_statuses"][key]["status"] in {
+            svc.STATUS_ACTIVE,
+            svc.STATUS_NEUTRAL,
+        }
+    active = [k for k, v in channel["model_statuses"].items() if v["status"] == svc.STATUS_ACTIVE]
+    assert active == ["frequency", "markov"]
+    assert list(channel["weights"]) == active

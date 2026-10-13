@@ -7,6 +7,7 @@ import {
   Card,
   Countdown,
   HeaderIconButton,
+  MODEL_REASON_TAGS,
   PageScaffold,
   PremiumInsightsPanel,
   RankRow,
@@ -148,8 +149,31 @@ export default function DashboardScreen() {
     [weights]
   );
 
-  const signals = useMemo(
-    () => [
+  /**
+   * The ensemble chips.
+   *
+   * Preferred source is the API's own per-model statuses, which list all four
+   * models whether or not they contributed — so a skipped model is shown greyed
+   * with its reason instead of vanishing from the panel. The local fallback
+   * exists only for a payload that predates the field (a stale backend or the
+   * dev stub): it reports the applied weights and marks the rest "planned",
+   * which was the best available statement before the backend could answer.
+   */
+  const signals = useMemo(() => {
+    const reported = channel?.modelStatuses ?? [];
+    if (reported.length > 0) {
+      return reported.map((status) => ({
+        key: status.key as string,
+        label: status.label,
+        detail:
+          status.status === 'active'
+            ? `${Math.round(status.weight * 100)}% weight`
+            : (MODEL_REASON_TAGS[status.reason] ?? 'Neutral'),
+        active: status.status === 'active',
+      }));
+    }
+
+    return [
       ...Object.entries(weights)
         .filter(([, weight]) => weight > 0)
         .map(([key, weight]) => ({
@@ -164,9 +188,8 @@ export default function DashboardScreen() {
         detail: `${signal.detail} · planned`,
         active: false,
       })),
-    ],
-    [weights]
-  );
+    ];
+  }, [channel, weights]);
 
   const dataLine = predictions?.latest_draw
     ? `ข้อมูลถึงงวด ${formatThaiDate(new Date(predictions.latest_draw.draw_date))} · ` +
@@ -342,7 +365,9 @@ export default function DashboardScreen() {
 
             <ThemedText type="small" themeColor="textMuted" style={styles.listNote}>
               Bar length is the Heng score (0–100). The pill is the model&apos;s literal per-draw
-              probability, where 1.0% is the uniform baseline across 100 codes.
+              probability, where 1.0% is the uniform baseline across 100 codes. All four model
+              badges are shown on every pick — a greyed badge is a model that contributed no
+              measured evidence there; tap it for the reason.
             </ThemedText>
           </Card>
 
@@ -350,7 +375,11 @@ export default function DashboardScreen() {
           <Card>
             <SectionHeader
               title="Model ensemble"
-              subtitle="Signals currently feeding the prediction"
+              subtitle={
+                channel
+                  ? `All four models · what feeds the ${market}-position blend`
+                  : 'Signals currently feeding the prediction'
+              }
             />
             <View style={styles.chips}>
               {signals.map((signal) => (

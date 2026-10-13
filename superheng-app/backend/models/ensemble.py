@@ -89,10 +89,16 @@ from services import (
     MIN_DRAWS_ANY,
     MIN_DRAWS_FREQUENCY,
     MIN_MARKOV_STRONG,
+    MIN_MARKOV_SUPPORT,
+    MODEL_KEYS,
     NUMBER_UNIVERSE,
+    REASON_NO_ARIMA_FIT,
+    REASON_NO_OBSERVED_TRANSITION,
+    STATUS_NEUTRAL,
     TOP_N,
     FrequencyRow,
     MarkovResult,
+    blend_model_statuses,
     build_reason,
     channel_series,
     draws_since_last_seen,
@@ -100,8 +106,10 @@ from services import (
     frequency_counts,
     frequency_rows,
     markov_analysis,
+    model_entry,
     prepare_history,
     rank_normalise,
+    refine_model_statuses,
     signal_tone,
     unconditional_distribution,
 )
@@ -203,6 +211,9 @@ class EnsembleResult:
     timeseries: TimeSeriesResult
     montecarlo: MonteCarloResult
     markov_support: int
+    # All four advertised models with their status in this channel's blend, so
+    # the response names what it skipped and not only what it used.
+    model_statuses: dict[str, dict[str, Any]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -227,6 +238,7 @@ class EnsembleResult:
                 k: round(v, 4) for k, v in self.weights_probability.items()
             },
             "weights_note": WEIGHTS_NOTE,
+            "model_statuses": self.model_statuses,
             "signals_contributing": self.signals_contributing,
             "agreement": round(self.agreement, 4),
             "agreement_pairs": self.agreement_pairs,
@@ -512,6 +524,39 @@ def blend_channel(
     # A signal the caller weighted to zero contributes nothing, so counting it as
     # a participant would let "four signals agree" describe a one-signal blend.
     contributing = {name: signals[name] for name, weight in applied.items() if weight > 0}
+
+    # Every one of the four models is reported, whether or not it reached the
+    # blend. `applied` is the renormalised map that produced the score, and
+    # `signals` is what the models could produce at all; the difference between
+    # the two is exactly the omission this field makes visible.
+    status_notes: dict[str, str] = {}
+    if "markov" not in signals:
+        status_notes["markov"] = (
+            f"No Markov estimate after {current_state}: only {markov.support} "
+            f"observed transition(s), below the floor of {MIN_MARKOV_SUPPORT} "
+            "needed before a conditional distribution is evidence."
+            if current_state
+            else "No Markov estimate: the series is empty."
+        )
+    if "timeseries" not in signals:
+        status_notes["timeseries"] = (
+            "ARIMA was dropped from the blend. "
+            + (timeseries_result.note or "No series could be fitted for this channel.")
+        )
+    if "montecarlo" not in signals:
+        status_notes["montecarlo"] = (
+            f"The Monte Carlo simulation was not usable: {montecarlo.note or 'no simulation was produced'}."
+        )
+    channel_statuses = blend_model_statuses(
+        applied=applied,
+        available=list(signals),
+        configured=configured,
+        draws=draws,
+        in_blend=MODEL_KEYS,
+        scope="the four-model ensemble",
+        notes=status_notes,
+    )
+
     agreement, agreement_pairs = score_agreement(contributing)
     confidence, confidence_reason = confidence_label(
         agreement=agreement,
@@ -570,6 +615,35 @@ def blend_channel(
             # `arima_forecast` populates an entry for every code, fitted or
             # fallen back, so this lookup is total.
             forecast = timeseries_result.detail[code]
+
+            # A model can be in the channel blend yet hold no *modelled* value
+            # for this specific code. Both cases are reported as neutral for this
+            # pick rather than being averaged into a channel-wide claim.
+            overrides: dict[str, dict[str, Any]] = {}
+            if "markov" in applied and markov_row is not None and markov_row.count == 0:
+                overrides["markov"] = model_entry(
+                    STATUS_NEUTRAL,
+                    weight=0.0,
+                    reason=REASON_NO_OBSERVED_TRANSITION,
+                    detail=(
+                        f"No transition from {current_state} into {code} was "
+                        f"observed, so this code's Markov entry is the add-{smoothing:g} "
+                        "smoothed prior rather than measured evidence."
+                    ),
+                )
+            if "timeseries" in applied and not forecast.fitted:
+                overrides["timeseries"] = model_entry(
+                    STATUS_NEUTRAL,
+                    weight=0.0,
+                    reason=REASON_NO_ARIMA_FIT,
+                    detail=(
+                        f"No ARIMA series was fitted for {code} "
+                        f"({forecast.occurrences} occurrence(s) in this window), so "
+                        "it holds the smoothed unconditional rate instead of a "
+                        "forecast."
+                    ),
+                )
+
             rankings.append(
                 {
                     # --- frontend RankEntry contract (src/data/mock.ts) -------
@@ -596,6 +670,7 @@ def blend_channel(
                     ),
                     # --- additive detail --------------------------------------
                     "tone": signal_tone(scores[code]),
+                    "model_statuses": refine_model_statuses(channel_statuses, overrides),
                     "evidence": {
                         "frequency": frequency_row.as_dict(),
                         "markov": markov_row.as_dict() if markov_row else None,
@@ -683,6 +758,7 @@ def blend_channel(
         timeseries=timeseries_result,
         montecarlo=montecarlo,
         markov_support=markov.support,
+        model_statuses=channel_statuses,
         warnings=warnings,
     )
 

@@ -165,6 +165,42 @@ def test_every_pick_publishes_its_per_signal_evidence(client: TestClient):
             assert "order" in evidence["timeseries"]
 
 
+def test_every_pick_publishes_all_four_model_statuses(client: TestClient):
+    """Over the wire: no pick may omit a model, active or neutral."""
+    for channel in advanced(client)["channels"].values():
+        assert list(channel["model_statuses"]) == [
+            "frequency",
+            "markov",
+            "timeseries",
+            "montecarlo",
+        ]
+        for entry in channel["rankings"]:
+            statuses = entry["model_statuses"]
+            assert list(statuses) == ["frequency", "markov", "timeseries", "montecarlo"]
+            for value in statuses.values():
+                assert value["status"] in {"active", "neutral"}
+                assert value["reason"] and value["detail"]
+                assert value["weight"] >= 0.0
+
+
+def test_the_basic_endpoint_also_lists_all_four_models(client: TestClient):
+    """Day 3 publishes two live models, and names the two it does not use."""
+    payload = client.get("/api/predict/basic", params={"limit": 120}).json()
+
+    for channel in payload["channels"].values():
+        statuses = channel["model_statuses"]
+        assert statuses["frequency"]["status"] == "active"
+        assert statuses["timeseries"]["reason"] == "not_in_blend"
+        assert statuses["montecarlo"]["reason"] == "not_in_blend"
+        for entry in channel["rankings"]:
+            assert list(entry["model_statuses"]) == [
+                "frequency",
+                "markov",
+                "timeseries",
+                "montecarlo",
+            ]
+
+
 def test_published_probabilities_sum_to_one_draw_per_channel(client: TestClient):
     """The coherence property the ARIMA signal broke and the ensemble restores."""
     for channel in advanced(client)["channels"].values():

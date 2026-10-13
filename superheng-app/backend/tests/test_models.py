@@ -27,7 +27,18 @@ import pytest
 from models import ensemble as ens
 from models import montecarlo as mc
 from models import timeseries as ts
-from services import DEFAULT_WEIGHTS as BASIC_WEIGHTS
+from services import (
+    DEFAULT_WEIGHTS as BASIC_WEIGHTS,
+)
+from services import (
+    MODEL_KEYS,
+    MODEL_LABELS,
+    REASON_INSUFFICIENT_SUPPORT,
+    REASON_NO_ARIMA_FIT,
+    REASON_WEIGHTED_ZERO,
+    STATUS_ACTIVE,
+    STATUS_NEUTRAL,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -888,3 +899,116 @@ def test_number_universe_and_shares_are_consistent():
         frequency = entry["evidence"]["frequency"]
         assert frequency["count"] >= 1
         assert 0.0 < frequency["share"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# ensemble — model statuses (\"transparency as a feature\")
+# ---------------------------------------------------------------------------
+
+
+def test_the_channel_lists_all_four_models_even_when_they_all_contribute():
+    payload = ens.analyse_draws_advanced(ledger_rows(300), simulations=2_000, max_codes=3)
+    channel = payload["channels"]["top"]
+
+    assert list(channel["model_statuses"]) == list(MODEL_KEYS)
+    for key, entry in channel["model_statuses"].items():
+        assert entry["label"] == MODEL_LABELS[key]
+        assert entry["reason"]
+        assert entry["detail"]
+        assert entry["status"] in {STATUS_ACTIVE, STATUS_NEUTRAL}
+
+    active = {
+        key for key, entry in channel["model_statuses"].items() if entry["status"] == "active"
+    }
+    assert active == set(channel["weights_applied"]), "active means it carried weight"
+    for key in active:
+        assert channel["model_statuses"][key]["weight"] == pytest.approx(
+            channel["weights_applied"][key]
+        )
+
+
+def test_a_dropped_arima_signal_is_reported_neutral_with_its_own_reason():
+    """20 draws cannot fit ARIMA, so the signal is dropped — and said so."""
+    payload = ens.analyse_draws_advanced(ledger_rows(20), simulations=2_000, max_codes=2)
+    channel = payload["channels"]["top"]
+
+    assert channel["timeseries"]["usable"] is False
+    arima = channel["model_statuses"]["timeseries"]
+    assert arima["status"] == STATUS_NEUTRAL
+    assert arima["reason"] == REASON_INSUFFICIENT_SUPPORT
+    assert arima["weight"] == 0.0
+    assert "ARIMA was dropped from the blend" in arima["detail"]
+
+
+def test_a_code_without_an_arima_fit_is_neutral_for_arima_alone():
+    """Only the fitted codes are active for ARIMA; the rest hold a baseline.
+
+    With ``max_codes=2`` the channel's ARIMA signal is usable, so this is the
+    per-pick narrowing rather than a dropped model: the channel is active while
+    most of its picks are neutral.
+    """
+    payload = ens.analyse_draws_advanced(ledger_rows(120), simulations=2_000, max_codes=2)
+    channel = payload["channels"]["top"]
+
+    assert channel["model_statuses"]["timeseries"]["status"] == STATUS_ACTIVE
+    assert channel["timeseries"]["fitted_codes"] == 2
+
+    for entry in channel["rankings"]:
+        arima = entry["model_statuses"]["timeseries"]
+        fitted = entry["evidence"]["timeseries"]["fitted"]
+        assert (arima["status"] == STATUS_ACTIVE) is bool(fitted)
+        if not fitted:
+            assert arima["reason"] == REASON_NO_ARIMA_FIT
+            assert "No ARIMA series was fitted" in arima["detail"]
+            assert arima["weight"] == 0.0
+
+    assert any(
+        entry["model_statuses"]["timeseries"]["status"] == STATUS_ACTIVE
+        for entry in channel["rankings"]
+    ), "the two fitted codes are ranked and must show ARIMA active"
+
+
+def test_a_zero_weighted_model_is_neutral_rather_than_missing():
+    only_frequency = {
+        "frequency": 1.0,
+        "markov": 0.0,
+        "timeseries": 0.0,
+        "montecarlo": 0.0,
+    }
+    payload = ens.analyse_draws_advanced(
+        ledger_rows(200), weights=only_frequency, simulations=2_000, max_codes=3
+    )
+    channel = payload["channels"]["top"]
+
+    assert channel["model_statuses"]["frequency"]["status"] == STATUS_ACTIVE
+    for key in ("markov", "timeseries", "montecarlo"):
+        entry = channel["model_statuses"][key]
+        assert entry["status"] == STATUS_NEUTRAL
+        assert entry["reason"] == REASON_WEIGHTED_ZERO
+        assert entry["weight"] == 0.0
+
+
+def test_every_pick_carries_its_own_four_model_statuses():
+    payload = ens.analyse_draws_advanced(ledger_rows(150), simulations=2_000, max_codes=2)
+
+    for channel in payload["channels"].values():
+        picks = channel["rankings"]
+        assert picks, "the fixture must rank something"
+        for entry in picks:
+            statuses = entry["model_statuses"]
+            assert list(statuses) == list(MODEL_KEYS)
+            for key, value in statuses.items():
+                assert value["label"] == MODEL_LABELS[key]
+                assert value["status"] in {STATUS_ACTIVE, STATUS_NEUTRAL}
+                assert value["reason"] and value["detail"]
+
+
+def test_an_empty_ledger_still_reports_the_four_models_per_channel():
+    payload = ens.analyse_draws_advanced([], simulations=2_000, max_codes=2)
+
+    for channel in payload["channels"].values():
+        assert channel["rankings"] == []
+        assert list(channel["model_statuses"]) == list(MODEL_KEYS)
+        assert all(
+            entry["status"] == STATUS_NEUTRAL for entry in channel["model_statuses"].values()
+        )

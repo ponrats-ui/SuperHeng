@@ -26,6 +26,12 @@ python-dotenv>=1.2
 # --- Ingestion (scraper.py / data_ingestion.py) ----------------------------
 requests>=2.32
 beautifulsoup4>=4.15      # HTML archive fallback parser
+# Imported directly by data_ingestion.py (`from urllib3.util.retry import Retry`),
+# which scraper.py imports in turn. `requests` already pulls urllib3 in, but a
+# module imported by name should be declared by name: a transitive dependency
+# that `requests` is free to bump or drop must not be the only thing standing
+# between a fresh clone and a working ingestion run.
+urllib3>=2.8
 pandas>=3.0               # optional: CSV export in data_ingestion.py
 
 # --- Advanced models (Day 5) -----------------------------------------------
@@ -42,6 +48,12 @@ statsmodels>=0.15
 # shared rather than additive. Stated plainly rather than given a token use to
 # justify its presence.
 scikit-learn>=1.9
+# Imported directly by models/ensemble.py, models/montecarlo.py and
+# models/timeseries.py (and by tests/test_models.py). pandas, statsmodels and
+# scikit-learn all depend on numpy, so it arrives either way — but the API's own
+# modules import it by name, so it is named here too, where it will be noticed
+# if the dependency of those packages ever changes.
+numpy>=2.5
 
 # --- Development / tests (not needed to run the service) -------------------
 # The Day 3 unit tests for the statistical models:
@@ -58,7 +70,7 @@ pytest>=9.1
 #   realtime==2.32.0      storage3==2.32.0     httpx==0.28.1
 #   requests==2.34.2      beautifulsoup4==4.15.0  soupsieve==3.0.3
 #   python-dotenv==1.2.4  pandas==3.0.6        numpy==2.5.4
-#   pytest==9.1.1
+#   urllib3==2.8.0        pytest==9.1.1
 #
 # Day 5 additions (installed from cp314 wheels — no build step needed):
 #   statsmodels==0.15.0   scikit-learn==1.9.1   scipy==1.18.1
