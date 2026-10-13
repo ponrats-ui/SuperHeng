@@ -141,22 +141,45 @@ directory is `dist` — **not** `superheng-app/dist`. Setting the root directory
 writing a repo-relative output path is the classic monorepo mistake; it fails with
 "output directory not found".
 
-4. Add environment variables (Pages → Settings → Environment variables). Set them
-   for **both** Production and Preview:
+4. **Build-time variables live in `wrangler.toml`, not in the dashboard.**
 
-| Variable | Value |
-|---|---|
-| `EXPO_PUBLIC_API_URL` | `https://superheng-api.onrender.com` |
-| `NODE_VERSION` | `22.16.0` |
+   With a `wrangler.toml` in the build root, Cloudflare takes the Pages build
+   configuration from that file, and the build environment is populated from its
+   `[vars]` table. The build log states what it found, in as many words:
 
-`EXPO_PUBLIC_API_URL` is **inlined at build time**. Changing it does nothing until
-you trigger a new deployment — saving the variable is not enough.
+   ```
+   Found wrangler.toml file. Reading build configuration...
+   pages_build_output_dir: dist
+   Build environment variables: (none found)
+   ```
 
-`NODE_VERSION` pins the build image's Node. Metro requires
-`^20.19.4 || ^22.13.0 || ^24.3.0 || >= 25.0.0`; 22.16.0 is already the Pages
-default, so this is only about making it explicit. Deliberately set *only* this
-one — Pages also honours `.nvmrc` and `.node-version`, and the docs do not state
-which wins, so mixing methods is how environments drift.
+   So `EXPO_PUBLIC_API_URL` is declared in [`wrangler.toml`](wrangler.toml), and
+   that is what reaches `npm run build`:
+
+   ```toml
+   [vars]
+   EXPO_PUBLIC_API_URL = "https://superheng-api.onrender.com"
+   ```
+
+   **Do not rely on a dashboard variable for this.** An entry added under
+   Settings → Variables and secrets is of type Text or Secret, which is a
+   *runtime* variable, and it does not reach the build. Measured on this project:
+   two production builds exported a bundle containing the `http://127.0.0.1:8000`
+   fallback from `src/lib/api.ts` and no trace of the Render URL, while the
+   dashboard entry was present and correct the whole time. `EXPO_PUBLIC_*` is
+   inlined at build time, so the value has to be readable *by the build* — and
+   declaring it here also keeps it under review instead of hidden in a dashboard.
+
+   It is a public endpoint that ends up in client JavaScript either way, which is
+   exactly why no secret belongs in this table.
+
+   `NODE_VERSION` is the one variable that stays in the dashboard, because it
+   selects the build image rather than being read by the build command. This
+   project's build ran on `nodejs@22.16.0`, which is also the Pages default, so it
+   is a pin rather than a change. Metro requires
+   `^20.19.4 || ^22.13.0 || ^24.3.0 || >= 25.0.0`. Deliberately set *only* this
+   one — Pages also honours `.nvmrc` and `.node-version`, and the docs do not
+   state which wins, so mixing methods is how environments drift.
 
 5. **Save and Deploy**. The site lands at `https://superheng-3yf.pages.dev`.
 
@@ -274,9 +297,27 @@ default (`*`), which is what local Expo builds rely on.
    static HTML file on Pages, so a blank tab usually means a missing route:
    `curl -s -o /dev/null -w '%{http_code}\n' https://superheng-3yf.pages.dev/insights`
    should print `200`.
-3. Open a pull request to confirm previews work: Cloudflare comments the preview
+3. Confirm the bundle the site actually serves. A `200` from `/` proves nothing
+   about this, because the failure mode is a *successful* build with the wrong
+   value baked in. The first check catches a missing `[vars]` entry; the second
+   catches Pages silently dropping an asset (Step 2, and the `node_modules`
+   limitation below):
+
+```bash
+JS=$(curl -s https://superheng-3yf.pages.dev/ | grep -oE '/_expo/static/js/web/[^"]+\.js' | head -1)
+
+# >= 1: the build inlined the Render URL. 0 means [vars] was not read.
+curl -s "https://superheng-3yf.pages.dev$JS" | grep -c 'superheng-api\.onrender\.com'
+
+# font/ttf: the asset was uploaded. text/html means the SPA fallback answered
+# instead, i.e. Pages refused to upload it and the icons render as blank squares.
+curl -s -o /dev/null -w '%{content_type}\n' \
+  "https://superheng-3yf.pages.dev/assets/vendor/@expo-google-fonts/material-symbols/400Regular/MaterialSymbols_400Regular.a1525894e1eb1edaa185654fe42c3f1a.ttf"
+```
+
+4. Open a pull request to confirm previews work: Cloudflare comments the preview
    URL, and the API accepts it via `CORS_ORIGIN_REGEX`.
-4. Run the API's non-browser path too — this proves the backend, independent of
+5. Run the API's non-browser path too — this proves the backend, independent of
    CORS (browsers enforce CORS; `curl` does not):
 
 ```bash
@@ -290,8 +331,10 @@ curl -s "https://superheng-api.onrender.com/api/predict/basic?limit=100" | head 
 - **Backend:** push to `main`. Render redeploys automatically
   (`autoDeployTrigger: commit`).
 - **Frontend:** push to `main`. Cloudflare rebuilds and republishes.
-- **Changing the API URL or any `EXPO_PUBLIC_*` variable:** update the variable,
-  then **trigger a new deployment** — a rebuild is what inlines it.
+- **Changing the API URL or any `EXPO_PUBLIC_*` variable:** edit `[vars]` in
+  [`wrangler.toml`](wrangler.toml) and push. The edit is what inlines the new value
+  into the bundle and the push is what makes Pages build it. Editing a dashboard
+  variable will not do it (see Step 2).
 
 ---
 
@@ -319,6 +362,21 @@ curl -s "https://superheng-api.onrender.com/api/predict/basic?limit=100" | head 
 - **Supabase connection pooling.** Each Render instance opens its own
   connections. One instance is harmless; scaling the service up needs the pooler
   endpoint (`...pooler.supabase.com`) rather than direct connections.
+- **Pages refuses to upload anything under a `node_modules` path.** Expo mirrors
+  asset source paths into `dist/assets/`, so the icon font and expo-router's
+  navigation icons are emitted at `dist/assets/node_modules/...`. Cloudflare
+  excludes those — "Pages would automatically exclude some files and folders from
+  being uploaded as static assets such as node_modules, .DS_Store, and .git" — and
+  no Pages setting turns the exclusion back off. It fails *silently*: the build
+  succeeded, 19 of 40 built files were never uploaded, and each excluded URL fell
+  through to the SPA fallback and returned `index.html` with a `200`. The browser
+  reported only `Failed to decode downloaded font ... invalid sfntVersion:
+  1008813235` — that number is `<!DO` — and the tab-bar icons rendered as empty
+  squares. [`scripts/fix-pages-assets.js`](scripts/fix-pages-assets.js) runs as a
+  `postbuild` hook, renames the directory to `vendor/` and rewrites the
+  references. It exits non-zero if any excluded reference survives, so if a future
+  Expo release changes where assets are emitted the build fails loudly instead of
+  shipping broken fonts again.
 - **Unknown paths return `index.html` with a 200.** The export has no
   `404.html`, so Pages falls back to the SPA behaviour. Cosmetic for the beta;
   copying `dist/+not-found.html` to `dist/404.html` after the build would make it
