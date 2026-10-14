@@ -813,6 +813,13 @@ is **ranking, structure and visualisation over the number space** — never an a
 This is the same rule as risk **R5**: word the copy as *model agreement*, never as a chance of
 winning.
 
+**Shipped.** The per-digit-position model this section asks for exists as
+`bayesian_positional` in [`backend/models/bayesian.py`](backend/models/bayesian.py), behind
+`GET /api/predict/premium`, and it covers **all six** positions of the 1st prize. Five rank a
+conditional posterior given the latest draw's adjacent higher digit; the leading digit
+(หลักแสน) has no higher neighbour, so it is published on its marginal alone — `conditioned_on:
+null` and `basis: "marginal"` — rather than presenting a conditional it never computed.
+
 Planned work, in order of expected value:
 
 - [ ] Ship **3-digit first**. 1,000 states is tractable with the Markov + Monte Carlo + ARIMA

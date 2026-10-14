@@ -22,7 +22,7 @@ function prettyPosition(name: string): string {
 }
 
 /**
- * Premium positional insights — the four lower digits of รางวัลที่ 1.
+ * Premium positional insights — all six digits of รางวัลที่ 1.
  *
  * Self-contained: it owns its request, loading, error and empty states, so the
  * dashboard only has to drop it into a card. There **is** a door in front of it —
@@ -213,12 +213,43 @@ function StatusPill({ status }: { status: PredictionStatus }) {
  * both are shown — `formatPercent(probability)` is the posterior this pick ranked
  * on, and the `x… vs marginal` line is the lift over the digit's overall rate, so
  * a genuinely elevated digit is distinguishable from one that is merely common.
+ *
+ * The leading digit has no conditioning context at all, so its bridge says so
+ * rather than printing a state it never had.
  */
 function PositionBlock({ estimate, first }: { estimate: PositionalEstimate; first: boolean }) {
   const { colors } = useAppTheme();
-  const bridge = estimate.conditioned_digit
-    ? `given ${prettyPosition(estimate.conditioned_on)} = ${estimate.conditioned_digit}`
-    : 'marginal only';
+  const bridge =
+    estimate.conditioned_on === null
+      ? 'leading digit · marginal only'
+      : estimate.conditioned_digit
+        ? `given ${prettyPosition(estimate.conditioned_on)} = ${estimate.conditioned_digit}`
+        : 'marginal only';
+
+  /**
+   * The pill reports the basis the *ranking* used, which is not the same question
+   * as `usable`. The leading digit is usable but ranks on its marginal, so reading
+   * that as "CONDITIONAL" would overstate it; a conditioned position that fell back
+   * to the marginal is labelled separately from one that never had a choice.
+   */
+  const basisLabel =
+    estimate.basis === 'conditional'
+      ? 'CONDITIONAL'
+      : estimate.usable
+        ? 'MARGINAL'
+        : 'THIN ROW';
+  const basisTone =
+    estimate.basis === 'conditional'
+      ? colors.success
+      : estimate.usable
+        ? colors.textMuted
+        : colors.warning;
+  const basisBackground =
+    estimate.basis === 'conditional'
+      ? `${colors.success}22`
+      : estimate.usable
+        ? colors.backgroundElement
+        : `${colors.warning}1A`;
 
   return (
     <View
@@ -239,19 +270,9 @@ function PositionBlock({ estimate, first }: { estimate: PositionalEstimate; firs
             {estimate.label}
           </ThemedText>
         </View>
-        <View
-          style={[
-            styles.basisPill,
-            {
-              backgroundColor: estimate.usable
-                ? `${colors.success}22`
-                : colors.backgroundElement,
-            },
-          ]}>
-          <ThemedText
-            type="small"
-            style={[styles.basisText, { color: estimate.usable ? colors.success : colors.textMuted }]}>
-            {estimate.usable ? 'CONDITIONAL' : 'MARGINAL'}
+        <View style={[styles.basisPill, { backgroundColor: basisBackground }]}>
+          <ThemedText type="small" style={[styles.basisText, { color: basisTone }]}>
+            {basisLabel}
           </ThemedText>
         </View>
       </View>

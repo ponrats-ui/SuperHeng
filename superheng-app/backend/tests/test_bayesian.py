@@ -31,8 +31,11 @@ from models.bayesian import (
     _prepare_prizes,
 )
 
-# index:            012345
-# prize[2:6] = thousands, hundreds, tens, units
+# index:              0 1 2 3 4 5
+# prize[0:6] = hundred-thousands, ten-thousands, thousands, hundreds, tens, units
+# Every prize here starts "00", which is what makes the two leading positions
+# hand-computable: index 0 is always '0' and index 1's only conditioning row is
+# the one for a leading digit of '0'.
 PRIZES = [
     "000000",
     "000000",
@@ -56,6 +59,14 @@ UNIT_CONDITIONAL_0 = (1 + UNIT_MARGINAL_0) / (UNIT_ROW_TOTAL + 1)
 # same marginal, so their conditionals are identical: 5/27.
 UNIT_CONDITIONAL_TIE = (1 + UNIT_MARGINAL_6) / (UNIT_ROW_TOTAL + 1)
 
+# Leading digit (index 0), which has no higher neighbour to condition on. Every
+# prize starts with 0, so its marginal is the only distribution it can be ranked
+# on: (8 + 1) / (8 + 10).
+LEADING_MARGINAL_0 = 9 / 18  # (8 + 1) / (8 + 10)
+# ten-thousands (index 1) conditions on the leading digit, whose only row here is
+# '0' with all 8 draws in it: conditional['0']['0'] = (8 + 1 * marginal) / (8 + 1).
+TEN_THOUSANDS_CONDITIONAL_0 = (8 + LEADING_MARGINAL_0) / 9
+
 
 @pytest.fixture()
 def model() -> BayesianPositionalModel:
@@ -67,11 +78,24 @@ def model() -> BayesianPositionalModel:
 # ---------------------------------------------------------------------------
 
 
-def test_positions_are_the_lower_four_digits_and_their_indices_match():
-    assert POSITION_NAMES == ("thousands", "hundreds", "tens", "units")
-    assert [spec.index for spec in POSITIONS] == [2, 3, 4, 5]
+# The five positions that have a higher neighbour, and so a conditional row.
+CONDITIONED_NAMES = tuple(spec.name for spec in POSITIONS if spec.conditioned)
+
+
+def test_positions_cover_all_six_digits_in_reading_order():
+    assert POSITION_NAMES == (
+        "hundred_thousands",
+        "ten_thousands",
+        "thousands",
+        "hundreds",
+        "tens",
+        "units",
+    )
+    assert [spec.index for spec in POSITIONS] == [0, 1, 2, 3, 4, 5]
     # Each target's conditioning neighbour is the one immediately to its left.
-    assert [spec.higher_index for spec in POSITIONS] == [1, 2, 3, 4]
+    assert [spec.higher_index for spec in POSITIONS] == [None, 0, 1, 2, 3, 4]
+    # Only the leading digit has nothing above it to condition on.
+    assert [spec.conditioned for spec in POSITIONS] == [False, True, True, True, True, True]
 
 
 def test_prepare_prizes_sorts_chronologically_and_keeps_the_full_prize():
@@ -136,7 +160,7 @@ def test_an_unvisited_state_falls_back_to_the_marginal_exactly(model):
         assert unseen[digit] == pytest.approx(model.marginal_posterior["units"][digit])
 
 
-@pytest.mark.parametrize("name", POSITION_NAMES)
+@pytest.mark.parametrize("name", CONDITIONED_NAMES)
 def test_every_conditional_row_is_a_distribution(model, name):
     for higher in "0123456789":
         assert sum(model.conditional_posterior[name][higher].values()) == pytest.approx(1.0)
@@ -180,6 +204,62 @@ def test_the_conditional_reason_quotes_the_counts_it_used(model):
     assert "tens digit of 1" in entry["reason"]
     assert "1 of 5 historical draws" in entry["reason"]
     assert "posterior vs" in entry["reason"]
+
+
+def test_the_leading_digit_is_published_on_its_marginal(model):
+    payload = model.predict()["hundred_thousands"]
+
+    # Nothing to its left: both conditioning fields are null, and the basis says
+    # marginal because that is the whole basis, not a fallback.
+    assert payload["conditioned_on"] is None
+    assert payload["conditioned_digit"] is None
+    assert payload["basis"] == "marginal"
+    assert payload["usable"] is True
+    # Its marginal is computed from every draw, so `support` is the whole ledger.
+    assert payload["support"] == len(PRIZES)
+    assert payload["top"][0]["digit"] == "0"
+    assert payload["top"][0]["probability"] == pytest.approx(LEADING_MARGINAL_0, abs=1e-6)
+    assert "leading digit" in payload["top"][0]["reason"]
+    assert "8 of 8 draws" in payload["top"][0]["reason"]
+
+
+def test_the_leading_digit_has_no_rows_and_ranks_on_the_marginal(model):
+    assert model.conditional_posterior["hundred_thousands"] == {}
+    assert set(model.row_counts["hundred_thousands"].values()) == {0}
+
+    payload = model.predict()["hundred_thousands"]
+    # Ranking on the marginal means the two published distributions are the same.
+    assert payload["distribution"] == payload["marginal_distribution"]
+
+
+def test_ten_thousands_conditions_on_the_leading_digit(model):
+    payload = model.predict()["ten_thousands"]
+
+    assert payload["conditioned_on"] == "hundred_thousands"
+    assert payload["conditioned_digit"] == "0"  # every prize in the ledger starts 0
+    assert payload["support"] == len(PRIZES)
+    assert payload["basis"] == "conditional"
+    assert payload["usable"] is True
+    assert payload["top"][0]["digit"] == "0"
+    assert payload["top"][0]["probability"] == pytest.approx(
+        TEN_THOUSANDS_CONDITIONAL_0, abs=1e-6
+    )
+    assert "hundred-thousands digit of 0" in payload["top"][0]["reason"]
+
+
+def test_a_high_support_floor_does_not_mark_the_leading_digit_unusable():
+    # min_support guards a *conditional row*; the leading digit has none, so the
+    # same floor must leave it usable while every conditioned position falls back.
+    guarded = BayesianPositionalModel(PRIZES, min_support=100)
+    payload = guarded.predict()
+
+    assert payload["hundred_thousands"]["usable"] is True
+    assert payload["hundred_thousands"]["basis"] == "marginal"
+    assert all(
+        not item["usable"]
+        for name, item in payload.items()
+        if name != "hundred_thousands"
+    )
 
 
 def test_a_thin_state_falls_back_to_the_marginal_and_says_so():

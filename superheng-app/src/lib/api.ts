@@ -222,17 +222,30 @@ export type BasicPredictions = {
 // Premium — Bayesian positional insights (`/api/predict/premium`)
 // ---------------------------------------------------------------------------
 
-/** Response key for each of the four modelled positions of the 6-digit first prize. */
-export type PositionKey = 'thousands' | 'hundreds' | 'tens' | 'units';
+/** Response key for each of the six modelled positions of the 6-digit first prize. */
+export type PositionKey =
+  | 'hundred_thousands'
+  | 'ten_thousands'
+  | 'thousands'
+  | 'hundreds'
+  | 'tens'
+  | 'units';
 
 /**
- * Display order for the four positions.
+ * Display order for the six positions, left to right as the prize is read.
  *
  * The backend returns them as an object, and nothing guarantees a browser or
  * Hermes preserves key insertion order, so the UI iterates this list rather than
  * `Object.keys(positions)`.
  */
-export const POSITION_KEYS: readonly PositionKey[] = ['thousands', 'hundreds', 'tens', 'units'];
+export const POSITION_KEYS: readonly PositionKey[] = [
+  'hundred_thousands',
+  'ten_thousands',
+  'thousands',
+  'hundreds',
+  'tens',
+  'units',
+];
 
 /** Which posterior a position ranked on. */
 export type PositionBasis = 'conditional' | 'marginal';
@@ -261,14 +274,20 @@ export type PositionalEstimate = {
   name: PositionKey;
   /** Human label, e.g. "Hundreds (หลักร้อย)". */
   label: string;
-  /** Index into the 6-digit prize string (2-5). */
+  /** Index into the 6-digit prize string (0-5; 0 is the leading digit). */
   index: number;
-  /** The adjacent higher position this one is conditioned on. */
-  conditioned_on: string;
+  /**
+   * The adjacent higher position this one is conditioned on, or null for the
+   * leading digit, which has no higher neighbour.
+   */
+  conditioned_on: PositionKey | null;
   /** The latest draw's digit at `conditioned_on`, or null without history. */
   conditioned_digit: string | null;
   support: number;
-  /** False when the conditional row was too thin and the marginal was used. */
+  /**
+   * False when the conditional row was too thin and the marginal was used. The
+   * leading digit is always usable: it ranks on the marginal by design.
+   */
   usable: boolean;
   basis: PositionBasis;
   /** The posterior the ranking used — all ten digits, keyed "0".."9". */
@@ -340,6 +359,17 @@ function toStatus(value: unknown): PredictionStatus {
 
 function asBasis(value: unknown): PositionBasis {
   return value === 'marginal' ? 'marginal' : 'conditional';
+}
+
+/**
+ * Guards a position key, used for the leading digit's null `conditioned_on`.
+ *
+ * This is intentionally a membership test against `POSITION_KEYS` rather than a
+ * coercion: an unrecognised value must read as "no conditioning position", never
+ * as a position name the UI would then print as if the server had sent it.
+ */
+function isPositionKey(value: unknown): value is PositionKey {
+  return typeof value === 'string' && (POSITION_KEYS as readonly string[]).includes(value);
 }
 
 function asSignalTone(value: unknown): SignalTone {
@@ -538,7 +568,7 @@ function toPositionalEstimate(name: PositionKey, raw: unknown): PositionalEstima
     name,
     label: asString(row.label, name),
     index: asNumber(row.index),
-    conditioned_on: asString(row.conditioned_on),
+    conditioned_on: isPositionKey(row.conditioned_on) ? row.conditioned_on : null,
     conditioned_digit:
       typeof row.conditioned_digit === 'string' ? row.conditioned_digit : null,
     support: asNumber(row.support),
@@ -783,7 +813,7 @@ export async function getBasicPredictions(
 }
 
 /**
- * Bayesian positional posteriors for the four lower digits of รางวัลที่ 1 — the
+ * Bayesian positional posteriors for all six digits of รางวัลที่ 1 — the
  * Premium tier.
  *
  * Degrades exactly like `getBasicPredictions`: a thin or empty ledger resolves

@@ -10,21 +10,30 @@ exactly the "structured decomposition — per-digit-position models" the ROADMAP
 6-digit tier calls for, and it is why the free tier's 2-digit ensemble is not
 simply copied here.
 
-Four target positions are modelled, the 3rd–6th digits from the right:
+All six positions are modelled, left to right:
 
-============  =====  ===========  ==================================
-key           index  Thai         meaning
-============  =====  ===========  ==================================
-``thousands`` 2      หลักพัน      thousands place
-``hundreds``  3      หลักร้อย     hundreds place
-``tens``      4      หลักสิบ      tens place
-``units``     5      หลักหน่วย    units place
-============  =====  ===========  ==================================
+=====================  =====  ==============  ===============================
+key                    index  Thai            meaning
+=====================  =====  ==============  ===============================
+``hundred_thousands``  0      หลักแสน         hundred-thousands (leading digit)
+``ten_thousands``      1      หลักหมื่น        ten-thousands place
+``thousands``          2      หลักพัน         thousands place
+``hundreds``           3      หลักร้อย        hundreds place
+``tens``               4      หลักสิบ         tens place
+``units``              5      หลักหน่วย       units place
+=====================  =====  ==============  ===============================
+
+The leading digit is the one position with **no higher neighbour**, so it is
+published on its marginal alone (``basis == "marginal"``, ``conditioned_on ==
+null``). A six-digit first prize may begin with 0, so all ten digits are possible
+there and nothing is truncated.
 
 The Bayesian part
 -----------------
-Two posteriors are computed per position, both closed-form Dirichlet-multinomial
-posterior means — no sampler, no approximation:
+Both posteriors are closed-form Dirichlet-multinomial posterior means — no
+sampler, no approximation. The conditional is computed for the five positions
+that have a higher neighbour; the leading digit publishes the marginal, which is
+all the evidence there is for it:
 
 ``marginal``
     ``P(digit | position)`` under a uniform ``Dirichlet(alpha)`` prior::
@@ -54,7 +63,9 @@ posterior given the *latest observed draw's* adjacent higher digit — the same
 "condition on the most recent state" convention Day 3's Markov step uses. When
 that state has fewer than ``min_support`` historical draws, the conditional
 estimate is not evidence, so the position falls back to the marginal and says so;
-the response never presents a thin conditional as if it were strong.
+the response never presents a thin conditional as if it were strong. The leading
+digit has no such state, so it is always ranked on its marginal and reports
+``conditioned_on`` as ``null``.
 
 Honesty constraints (VISION.md §2.5, §5)
 ----------------------------------------
@@ -108,29 +119,56 @@ METHODOLOGY_NOTE = (
     "Per-position Bayesian posteriors over the six digits of รางวัลที่ 1. The "
     "marginal is a Dirichlet-posterior mean under a uniform prior; the premium "
     "conditional shrinks each (higher digit -> digit) row toward that marginal. "
-    "These are model probabilities about historical behaviour, not a chance of "
-    "winning: a fair draw is independent, and any positional lift observed here "
-    "may be entirely sampling noise."
+    "The leading digit has no higher position to condition on, so it is published "
+    "on its marginal alone. These are model probabilities about historical "
+    "behaviour, not a chance of winning: a fair draw is independent, and any "
+    "positional lift observed here may be entirely sampling noise."
 )
 
 
 @dataclass(frozen=True)
 class PositionSpec:
-    """One modelled position, plus the adjacent higher position it conditions on."""
+    """One modelled position, plus the adjacent higher position it conditions on.
+
+    The ``higher_*`` fields are ``None`` for the leading digit, which has nothing
+    to its left to condition on — see :attr:`conditioned`.
+    """
 
     name: str
     label: str
     plain: str  # human-readable name for reason strings
     index: int
-    higher_name: str
-    higher_plain: str
-    higher_index: int
+    higher_name: str | None = None
+    higher_plain: str | None = None
+    higher_index: int | None = None
+
+    @property
+    def conditioned(self) -> bool:
+        """True when there is a higher position to condition on."""
+        return self.higher_index is not None
 
 
-# Index 0 is the leading digit (hundred-thousands), index 5 the units digit. The
-# four targets are the 3rd-6th digits from the right; each has a well-populated
-# higher neighbour because none of them is the leading digit.
+# Index 0 is the leading digit (hundred-thousands), index 5 the units digit. All
+# six digits are targets, ordered left to right so the payload reads in the same
+# direction as the prize string. Every position but the leading digit has a
+# well-populated higher neighbour; the leading digit is published on its marginal
+# because there is nothing above it to condition on.
 POSITIONS: tuple[PositionSpec, ...] = (
+    PositionSpec(
+        name="hundred_thousands",
+        label="Hundred-thousands (หลักแสน)",
+        plain="hundred-thousands",
+        index=0,
+    ),
+    PositionSpec(
+        name="ten_thousands",
+        label="Ten-thousands (หลักหมื่น)",
+        plain="ten-thousands",
+        index=1,
+        higher_name="hundred_thousands",
+        higher_plain="hundred-thousands",
+        higher_index=0,
+    ),
     PositionSpec(
         name="thousands",
         label="Thousands (หลักพัน)",
@@ -313,9 +351,14 @@ class BayesianPositionalModel:
 
         for prize in self.prizes:
             for spec in POSITIONS:
-                higher = prize[spec.higher_index]
                 digit = prize[spec.index]
                 self.marginal_counts[spec.name][digit] += 1
+                higher_index = spec.higher_index
+                if higher_index is None:
+                    # The leading digit has no higher neighbour, so there is no row
+                    # to count it into: its marginal is its whole story.
+                    continue
+                higher = prize[higher_index]
                 self.row_counts[spec.name][higher] += 1
                 self.joint_counts[spec.name][higher][digit] += 1
 
@@ -333,8 +376,13 @@ class BayesianPositionalModel:
             self.marginal_posterior[spec.name] = marginal
 
             # Conditional posterior — the position's own marginal is the prior for
-            # each row, so a thin row shrinks toward it instead of to uniform.
+            # each row, so a thin row shrinks toward it instead of to uniform. The
+            # leading digit has no rows, so it keeps an empty mapping: `predict`
+            # reads the marginal for it rather than pretending a conditional exists.
             conditional: dict[str, dict[str, float]] = {}
+            if not spec.conditioned:
+                self.conditional_posterior[spec.name] = conditional
+                continue
             for higher in DIGITS:
                 row_total = self.row_counts[spec.name][higher]
                 row_denominator = row_total + self.pseudocount
@@ -349,6 +397,23 @@ class BayesianPositionalModel:
             self.conditional_posterior[spec.name] = conditional
 
     # -- inference --------------------------------------------------------
+    def _no_history(
+        self, spec: PositionSpec, digit: str, posterior: Mapping[str, float]
+    ) -> DigitEstimate:
+        """The single estimate shape used when there is no history to rank on."""
+        marginal = self.marginal_posterior[spec.name][digit]
+        probability = float(posterior[digit])
+        return DigitEstimate(
+            digit=digit,
+            probability=probability,
+            marginal=marginal,
+            lift=(probability / marginal) if marginal else 0.0,
+            count=0,
+            support=0,
+            basis="marginal",
+            reason="No draw history, so no positional estimate is available.",
+        )
+
     def _estimate(
         self,
         spec: PositionSpec,
@@ -363,17 +428,32 @@ class BayesianPositionalModel:
         probability = float(posterior[digit])
         lift = (probability / marginal) if marginal else 0.0
 
-        if state is None:
+        if not spec.conditioned:
+            # The leading digit is ranked on its marginal, and the reason has to say
+            # that this *is* the whole basis rather than that a thin conditional was
+            # abandoned — there is no higher position, so nothing was shrunk.
+            if self.latest is None:
+                return self._no_history(spec, digit, posterior)
+            count = self.marginal_counts[spec.name][digit]
+            reason = (
+                f"The {spec.plain} digit is the leading digit, so no higher position "
+                f"can condition it: it is ranked on the marginal, where {digit} "
+                f"appears in {count} of {self.draws} draws "
+                f"({probability * 100:.1f}%)."
+            )
             return DigitEstimate(
                 digit=digit,
                 probability=probability,
                 marginal=marginal,
                 lift=lift,
-                count=0,
-                support=0,
+                count=count,
+                support=self.draws,
                 basis="marginal",
-                reason="No draw history, so no positional estimate is available.",
+                reason=reason,
             )
+
+        if state is None:
+            return self._no_history(spec, digit, posterior)
 
         if usable:
             count = self.joint_counts[spec.name][state][digit]
@@ -423,20 +503,33 @@ class BayesianPositionalModel:
         results: dict[str, Any] = {}
 
         for spec in POSITIONS:
-            state = self.latest[spec.higher_index] if self.latest else None
-            support = (
-                self.row_counts[spec.name].get(state, 0)
-                if state is not None
-                else 0
+            higher_index = spec.higher_index
+            state = (
+                self.latest[higher_index]
+                if self.latest and higher_index is not None
+                else None
             )
-            usable = bool(state is not None and support >= self.min_support)
-
-            posterior = (
-                self.conditional_posterior[spec.name][state]
-                if usable and state is not None
-                else self.marginal_posterior[spec.name]
-            )
-            basis = "conditional" if usable else "marginal"
+            if spec.conditioned:
+                support = (
+                    self.row_counts[spec.name].get(state, 0)
+                    if state is not None
+                    else 0
+                )
+                usable = bool(state is not None and support >= self.min_support)
+                posterior = (
+                    self.conditional_posterior[spec.name][state]
+                    if usable and state is not None
+                    else self.marginal_posterior[spec.name]
+                )
+            else:
+                # No row that can be too thin, and every draw informs the marginal,
+                # so the leading digit is usable as soon as there is any history.
+                support = self.draws
+                usable = self.draws > 0
+                posterior = self.marginal_posterior[spec.name]
+            # `usable` and `basis` answer different questions: a leading-digit
+            # marginal was never a fallback, only a conditioned position can be.
+            basis = "conditional" if spec.conditioned and usable else "marginal"
 
             ordered = sorted(DIGITS, key=lambda item: (-posterior[item], item))
             top = [

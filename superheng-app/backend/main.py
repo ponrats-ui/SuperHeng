@@ -18,8 +18,8 @@ Endpoints
 ``GET /api/predict/basic`` Frequency + Markov Chain -> ranked 2-digit picks
 ``GET /api/predict/advanced`` Frequency + Markov + ARIMA + Monte Carlo -> the
                           weighted ensemble Heng Score
-``GET /api/predict/premium`` Bayesian positional posteriors for the 4 lower
-                          digits of the 6-digit first prize (Premium tier)
+``GET /api/predict/premium`` Bayesian positional posteriors for all six digits
+                          of the first prize (Premium tier)
 
 Design notes
 ------------
@@ -622,9 +622,9 @@ async def predict_advanced(
 @app.get(
     "/api/predict/premium",
     tags=["predict"],
-    summary="Bayesian positional posteriors for the 4 lower digits of รางวัลที่ 1",
+    summary="Bayesian positional posteriors for all six digits of รางวัลที่ 1",
     response_description=(
-        "Top 3 digits per position (thousands, hundreds, tens, units), each with a "
+        "Top 3 digits per position (hundred_thousands to units), each with a "
         "posterior probability (0.0-1.0) and a math-derived reason"
     ),
 )
@@ -641,10 +641,11 @@ async def predict_premium(
 ) -> dict[str, Any]:
     """Premium tier: a per-position Bayesian model of the 6-digit first prize.
 
-    For each of the four modelled positions — ``thousands``, ``hundreds``,
-    ``tens`` and ``units`` (the 3rd–6th digits from the right) — this returns the
-    **top 3** digits with their posterior probability (0.0-1.0) and a reason
-    assembled from the computed counts.
+    For each of the six modelled positions — ``hundred_thousands``,
+    ``ten_thousands``, ``thousands``, ``hundreds``, ``tens`` and ``units`` (the
+    whole first prize, read left to right) — this returns the **top 3** digits with
+    their posterior probability (0.0-1.0) and a reason assembled from the computed
+    counts.
 
     Two probabilities drive each pick, and the difference between them is the
     Premium feature:
@@ -655,6 +656,10 @@ async def predict_premium(
       latest draw's adjacent higher digit, shrinking each row toward the marginal.
       A position ranks on the conditional when that state has enough support, and
       falls back to the marginal (saying so) when it does not.
+
+    The leading digit (``hundred_thousands``) has no higher neighbour, so it is the
+    one position that always ranks on its marginal: it reports ``conditioned_on``
+    as ``null`` and ``basis`` as ``"marginal"``, and is not marked unusable for it.
 
     The response also carries ``distribution`` — the full posterior it ranked on,
     all ten digits — so the client can draw the whole bar rather than only the top
