@@ -42,6 +42,12 @@ on:
           - laos
           - vietnam
         default: all
+      window:
+        description: >-
+          How many draw dates back to walk. Leave at 14 for the routine window;
+          raise it (e.g. 30 or 60) to backfill a country that has no history.
+        type: string
+        default: "14"
 
 # The jobs only read the repository and write to Supabase over HTTPS.
 permissions:
@@ -148,6 +154,10 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      # The routine window unless a manual dispatch asked for more. Resolved here
+      # rather than inline because `inputs` is empty on a scheduled run, and an
+      # empty `--days` would abort the script.
+      LOOKBACK_DAYS: ${{ inputs.window || '14' }}
 
     steps:
       - name: Check out the repository
@@ -185,7 +195,7 @@ jobs:
         # explicit `--from`/`--to` run rather than the default — see the script's
         # usage block. It exits non-zero when a whole window yields nothing, which
         # is a broken source rather than a quiet day.
-        run: python superheng-app/backend/scripts/scrape_international.py --type vietnam
+        run: python superheng-app/backend/scripts/scrape_international.py --type vietnam --days "$LOOKBACK_DAYS"
 
       - name: Verify the ledger actually received the data
         run: python superheng-app/backend/verify_ingestion.py --type vietnam
@@ -205,6 +215,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      LOOKBACK_DAYS: ${{ inputs.window || '14' }}
 
     steps:
       - name: Check out the repository
@@ -241,7 +252,7 @@ jobs:
         # walk already skips weekends, so this is ~10 requests). A Lao draw Kapook
         # has not published yet is a skip, not a failure — the next run picks it up,
         # because the window is a fortnight rather than a single day.
-        run: python superheng-app/backend/scripts/scrape_international.py --type laos
+        run: python superheng-app/backend/scripts/scrape_international.py --type laos --days "$LOOKBACK_DAYS"
 
       - name: Verify the ledger actually received the data
         run: python superheng-app/backend/verify_ingestion.py --type laos
