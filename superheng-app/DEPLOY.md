@@ -130,11 +130,20 @@ Two things that are easy to get wrong:
 ### Note for beta testers: free instances sleep
 
 A free Render web service spins down after **15 minutes** with no traffic and
-takes roughly a **minute** to wake on the next request. Engineers testing the
-site will see one very slow first load, and the dashboard's offline banner may
-appear if the frontend times out before the API wakes. If that is unacceptable
-during the beta, switch the service to a paid **Starter** instance in the
-dashboard (or in `render.yaml`, then re-apply) — the instance always stays warm.
+takes roughly a **minute** to wake on the next request, so the first visit after
+a quiet spell is a very slow load.
+
+The frontend is built for that. `src/lib/api.ts` retries a hung or
+`502`-answering request with rising backoff for up to `WAKE_DEADLINE_MS` (75s),
+so a single 10s abort can no longer misreport a healthy-but-sleeping service as
+dead. While that happens the header badge reads **CONNECTING**, then **WAKING**
+once retries begin — never **OFFLINE**, which is now reserved for a request that
+actually failed after the whole budget. That distinction is what keeps a beta
+tester from seeing "OFFLINE" over a backend that is merely booting.
+
+If even that wait is unacceptable during the beta, switch the service to a paid
+**Starter** instance in the dashboard (or in `render.yaml`, then re-apply) — the
+instance always stays warm.
 
 ---
 
@@ -190,6 +199,16 @@ writing a repo-relative output path is the classic monorepo mistake; it fails wi
 
    It is a public endpoint that ends up in client JavaScript either way, which is
    exactly why no secret belongs in this table.
+
+   **Rebuild with `--clear` after changing it.** `expo export` reuses Metro's
+   transform cache, and the inlined `EXPO_PUBLIC_*` value is part of what is
+   cached. Measured here: a second `expo export -p web` run with a different
+   `EXPO_PUBLIC_API_URL` shipped a bundle that still contained the *previous*
+   build's value, so the verified page called a host that no longer existed and
+   the dashboard showed its offline state. `npx expo export -p web --clear`
+   rebuilds it correctly. The Pages build never hits this — it starts from a fresh
+   checkout — but a local export used for verification will silently lie about
+   which API it is talking to.
 
    `NODE_VERSION` is the one variable that stays in the dashboard, because it
    selects the build image rather than being read by the build command. This
@@ -376,7 +395,8 @@ curl -s "https://superheng-api.onrender.com/api/predict/basic?limit=100" | head 
   Step 3). Both are beta-only and must be reverted before launch, and before any
   cookie-based login is introduced.
 - **Free Render instances sleep** (see Step 1). Expect a ~1 minute cold start
-  after 15 idle minutes.
+  after 15 idle minutes. The client waits it out — retrying for up to 75s and
+  labelling the wait "WAKING" — instead of reporting an offline backend.
 - **Supabase connection pooling.** Each Render instance opens its own
   connections. One instance is harmless; scaling the service up needs the pooler
   endpoint (`...pooler.supabase.com`) rather than direct connections.

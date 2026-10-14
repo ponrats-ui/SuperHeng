@@ -43,8 +43,69 @@ import { MODEL_KEYS, MODEL_LABELS, type ModelKey, type ModelStatus, type RankEnt
  */
 export const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://127.0.0.1:8000';
 
-/** How long to wait before treating a request as unreachable. */
+/**
+ * How long one *attempt* waits before it is treated as unreachable.
+ *
+ * This is not the request budget — see `WAKE_DEADLINE_MS`. A hung attempt is
+ * the signature of a sleeping instance (see `request` below), not proof that the
+ * service is down, so the transport retries until that deadline instead of
+ * giving up here.
+ */
 export const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * How long the transport keeps retrying before it reports failure.
+ *
+ * Sized for a cold start, not for a healthy server: Render's free instances spin
+ * down after inactivity and the dashboard warns that waking one "can delay
+ * requests by 50 seconds or more". A single 10s attempt can never cover that, so
+ * the budget is deliberately minutes-shaped rather than seconds-shaped while the
+ * per-attempt timeout stays short enough to notice a genuinely dead service.
+ */
+export const WAKE_DEADLINE_MS = 75_000;
+
+/**
+ * Pause before each retry, in order. The last value repeats once exhausted.
+ *
+ * Rising rather than fixed: the first retry happens while the instance is still
+ * booting, so hammering it gains nothing, and by the fifth the server is usually
+ * seconds from answering.
+ */
+export const RETRY_BACKOFF_MS = [1_000, 2_000, 3_000, 5_000, 8_000] as const;
+
+/**
+ * Told to the caller before each retry, so the UI can name what it is waiting for.
+ */
+export type RequestProgress = {
+  /** The attempt that is about to start — 2 on the first retry. */
+  attempt: number;
+  /** Milliseconds since the first attempt began. */
+  elapsedMs: number;
+  /** Why the previous attempt ended. */
+  lastKind: ApiErrorKind;
+};
+
+export type RequestOptions = {
+  /**
+   * Called before each retry.
+   *
+   * The dashboard uses it to switch its spinner from "loading" to "waking the
+   * server", which is the difference between a pause a user waits out and one
+   * they read as a dead backend.
+   */
+  onRetry?: (progress: RequestProgress) => void;
+  /**
+   * Overrides for unusually slow endpoints and for tests. The defaults are the
+   * production budgets, and both are per request.
+   *
+   * `attemptTimeoutMs` is the one to raise for an endpoint that legitimately
+   * computes for longer than `REQUEST_TIMEOUT_MS` — otherwise the transport reads
+   * slow-but-working as `timeout` and retries it, spending the server's time
+   * twice for one answer.
+   */
+  attemptTimeoutMs?: number;
+  deadlineMs?: number;
+};
 
 // ---------------------------------------------------------------------------
 // Response types (mirror of backend/services.py)
@@ -542,9 +603,10 @@ export function parsePremiumInsights(body: unknown): PremiumInsights {
 // Transport
 // ---------------------------------------------------------------------------
 
-async function request(path: string): Promise<unknown> {
+/** One HTTP round trip, bounded by `timeoutMs`. */
+async function attempt(path: string, timeoutMs: number): Promise<unknown> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     let response: Response;
@@ -558,7 +620,7 @@ async function request(path: string): Promise<unknown> {
         throw new ApiError(
           'timeout',
           `The prediction service at ${BASE_URL} did not answer within ` +
-            `${Math.round(REQUEST_TIMEOUT_MS / 1000)}s.`
+            `${Math.round(timeoutMs / 1000)}s.`
         );
       }
       throw error;
@@ -612,6 +674,90 @@ async function request(path: string): Promise<unknown> {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Whether a failure is worth retrying. Only two shapes qualify, and neither is
+ * an answer from this application:
+ *
+ * - `timeout` — the request hung. Render's proxy parks the connection while a
+ *   spun-down instance boots, so silence *is* what waking looks like from here.
+ * - `502`/`503`/`504` — the proxy answered because the app could not: still
+ *   booting, or being swapped out mid-deploy.
+ *
+ * Everything else fails immediately on purpose. A refused connection (nothing
+ * listening — local dev with no backend running) and a 4xx/5xx from FastAPI
+ * itself are real answers, and retrying those for 75s would only postpone the
+ * error card.
+ */
+function isRetryable(error: unknown): boolean {
+  if (!isApiError(error)) return false;
+  if (error.kind === 'timeout') return true;
+  return (
+    error.kind === 'http' && error.status !== undefined && error.status >= 502 && error.status <= 504
+  );
+}
+
+/**
+ * The error reported once the budget is spent.
+ *
+ * A bare `timeout` message covers one attempt's window, which after several
+ * attempts describes the last try rather than the minute the user actually
+ * waited. Rewritten to span the whole run so the number on screen is the number
+ * they sat through; other kinds already carry the server's own words.
+ */
+function exhausted(error: unknown, attempts: number, elapsedMs: number): unknown {
+  if (!isApiError(error) || error.kind !== 'timeout') return error;
+  return new ApiError(
+    'timeout',
+    `The prediction service at ${BASE_URL} did not answer within ` +
+      `${Math.round(elapsedMs / 1000)}s (${attempts} attempts). A free instance ` +
+      'that has spun down can take a minute or more to wake — Retry will try again.'
+  );
+}
+
+/**
+ * One request, retried for as long as the failure looks like a sleeping server.
+ *
+ * This exists because the API runs on a free Render instance that spins down
+ * after inactivity, and the dashboard's own warning puts waking it at "50 seconds
+ * or more". A client that aborts once at 10s therefore reports a *healthy*
+ * backend as unreachable on the first visit after a quiet spell — observed on
+ * the deployed beta, where the same call answered in ~1.3s once warm. Spending
+ * the budget in retries instead of one long wait also lets the caller say it is
+ * waking the server rather than pretending it is offline.
+ *
+ * The deadline bounds when the *next* attempt may start, so the worst case is
+ * one attempt past it.
+ */
+async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
+  const attemptTimeoutMs = options.attemptTimeoutMs ?? REQUEST_TIMEOUT_MS;
+  const deadlineMs = options.deadlineMs ?? WAKE_DEADLINE_MS;
+  const startedAt = Date.now();
+
+  for (let attemptNumber = 1; ; attemptNumber += 1) {
+    try {
+      return await attempt(path, attemptTimeoutMs);
+    } catch (error) {
+      const delayMs = RETRY_BACKOFF_MS[Math.min(attemptNumber - 1, RETRY_BACKOFF_MS.length - 1)];
+      const elapsedMs = Date.now() - startedAt;
+
+      if (!isRetryable(error) || elapsedMs + delayMs >= deadlineMs) {
+        throw exhausted(error, attemptNumber, elapsedMs);
+      }
+
+      if (isApiError(error)) {
+        options.onRetry?.({ attempt: attemptNumber + 1, elapsedMs, lastKind: error.kind });
+      }
+      await sleep(delayMs);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Endpoints
 // ---------------------------------------------------------------------------
@@ -625,10 +771,15 @@ async function request(path: string): Promise<unknown> {
  * rejection always means the call itself failed — see `ApiError.kind`.
  *
  * @param limit How many recent draws to analyse. Omit for the whole ledger.
+ * @param options Per-request budgets, plus `onRetry` for a caller that wants to
+ * announce that it is waiting on a cold server.
  */
-export async function getBasicPredictions(limit?: number): Promise<BasicPredictions> {
+export async function getBasicPredictions(
+  limit?: number,
+  options?: RequestOptions
+): Promise<BasicPredictions> {
   const query = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`;
-  return parsePredictions(await request(`/api/predict/basic${query}`));
+  return parsePredictions(await request(`/api/predict/basic${query}`, options));
 }
 
 /**
@@ -641,10 +792,15 @@ export async function getBasicPredictions(limit?: number): Promise<BasicPredicti
  * error. A rejection always means the call itself failed — see `ApiError.kind`.
  *
  * @param limit How many recent draws to analyse. Omit for the whole ledger.
+ * @param options Per-request budgets, plus `onRetry` for a caller that wants to
+ * announce that it is waiting on a cold server.
  */
-export async function getPremiumInsights(limit?: number): Promise<PremiumInsights> {
+export async function getPremiumInsights(
+  limit?: number,
+  options?: RequestOptions
+): Promise<PremiumInsights> {
   const query = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`;
-  return parsePremiumInsights(await request(`/api/predict/premium${query}`));
+  return parsePremiumInsights(await request(`/api/predict/premium${query}`, options));
 }
 
 // ---------------------------------------------------------------------------

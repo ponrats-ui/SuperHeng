@@ -25,10 +25,10 @@ function prettyPosition(name: string): string {
  * Premium positional insights — the four lower digits of รางวัลที่ 1.
  *
  * Self-contained: it owns its request, loading, error and empty states, so the
- * dashboard only has to drop it into a card. There is **no lock here** — this is
- * Founder Mode, where the tier is open so the math and layout can be tested on
- * device before any paywall exists. The real gate is a server-side entitlement
- * check, which is deliberately not faked client-side.
+ * dashboard only has to drop it into a card. There **is** a door in front of it —
+ * `PremiumGate`, while the beta runs — but it is presentation, not entitlement:
+ * this component still calls `/api/predict/premium` directly and that endpoint is
+ * unauthenticated, so treat the panel as public until the API enforces access.
  *
  * Three states are rendered for the three outcomes the endpoint can produce:
  * a genuine failure (`ApiError`), an empty/thin ledger (`insufficient_data` /
@@ -40,6 +40,12 @@ export function PremiumInsightsPanel() {
   const [insights, setInsights] = useState<PremiumInsights | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /**
+   * True once the transport has started retrying, i.e. the first attempt did not
+   * answer and the instance is probably booting. See the dashboard's LoadingCard
+   * for the same distinction.
+   */
+  const [waking, setWaking] = useState(false);
   /** Bumped by Retry; the fetch effect keys off it. */
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -52,7 +58,12 @@ export function PremiumInsightsPanel() {
   useEffect(() => {
     let cancelled = false;
 
-    void getPremiumInsights().then(
+    void getPremiumInsights(undefined, {
+      onRetry: () => {
+        if (cancelled) return;
+        setWaking(true);
+      },
+    }).then(
       (result) => {
         if (cancelled) return;
         setInsights(result);
@@ -78,6 +89,7 @@ export function PremiumInsightsPanel() {
 
   function retry() {
     setLoading(true);
+    setWaking(false);
     setReloadKey((key) => key + 1);
   }
 
@@ -86,7 +98,9 @@ export function PremiumInsightsPanel() {
       <View style={styles.stateBody}>
         <ActivityIndicator color={colors.primary} />
         <ThemedText type="small" themeColor="textSecondary" style={styles.stateText}>
-          กำลังโหลดการวิเคราะห์รายตำแหน่ง…
+          {waking
+            ? 'กำลังปลุกเซิร์ฟเวอร์… (เซิร์ฟเวอร์สลีปอยู่ อาจใช้เวลาถึง 1 นาที)'
+            : 'กำลังโหลดการวิเคราะห์รายตำแหน่ง…'}
         </ThemedText>
       </View>
     );

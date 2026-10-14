@@ -8,6 +8,7 @@ export * from './locked-panel';
 export * from './modal-scaffold';
 export * from './model-status-chips';
 export * from './page-scaffold';
+export * from './premium-gate';
 export * from './premium-insights';
 export * from './probability-bar';
 export * from './radar-chart';

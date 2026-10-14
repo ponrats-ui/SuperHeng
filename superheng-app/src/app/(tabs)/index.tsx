@@ -9,6 +9,7 @@ import {
   HeaderIconButton,
   MODEL_REASON_TAGS,
   PageScaffold,
+  PremiumGate,
   PremiumInsightsPanel,
   RankRow,
   ScoreRing,
@@ -33,6 +34,23 @@ import { formatCount, formatDate, formatThaiDate } from '@/lib/format';
 
 /** The two independently drawn 2-digit positions the backend ranks. */
 type Market = ChannelKey;
+
+/**
+ * What the header badge is allowed to claim.
+ *
+ * Four states, because a boolean conflated three different situations and named
+ * all of them "offline": nothing answered *yet*, the server is being woken, and
+ * the request actually failed.
+ */
+type ConnectionState = 'live' | 'connecting' | 'waking' | 'offline';
+
+/** Badge wording per state. Static, so it lives outside the component. */
+const CONNECTION_LABEL: Record<ConnectionState, string> = {
+  live: 'LIVE',
+  connecting: 'CONNECTING',
+  waking: 'WAKING',
+  offline: 'OFFLINE',
+};
 
 const MARKET_OPTIONS = [
   { key: 'top' as const, label: 'Top Position' },
@@ -73,6 +91,12 @@ export default function DashboardScreen() {
   const [predictions, setPredictions] = useState<BasicPredictions | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /**
+   * True once the transport has started retrying — i.e. the first attempt did
+   * not answer and the server is probably booting. Distinct from `loading` so the
+   * wait can be explained instead of merely endured.
+   */
+  const [waking, setWaking] = useState(false);
   /** Bumped by Retry; the fetch effect keys off it. */
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -92,7 +116,12 @@ export default function DashboardScreen() {
   useEffect(() => {
     let cancelled = false;
 
-    void getBasicPredictions().then(
+    void getBasicPredictions(undefined, {
+      onRetry: () => {
+        if (cancelled) return;
+        setWaking(true);
+      },
+    }).then(
       (result) => {
         if (cancelled) return;
         setPredictions(result);
@@ -120,6 +149,7 @@ export default function DashboardScreen() {
   const retry = useCallback(() => {
     setLoading(true);
     setError(null);
+    setWaking(false);
     setReloadKey((key) => key + 1);
   }, []);
 
@@ -196,13 +226,27 @@ export default function DashboardScreen() {
       `${formatCount(predictions.draws_analyzed)} งวด`
     : null;
 
+  /**
+   * The header badge.
+   *
+   * Only a rejection earns "OFFLINE". While a request is still in flight the
+   * honest words are "connecting" or, once retries have begun, "waking" — a free
+   * Render instance that has spun down can take a minute to answer, and calling
+   * that offline made a working backend look dead.
+   */
+  const connection: ConnectionState = (() => {
+    if (predictions !== null && error === null) return 'live';
+    if (error !== null) return 'offline';
+    return waking ? 'waking' : 'connecting';
+  })();
+
   return (
     <PageScaffold>
       <AppHeader
         subtitle="Probability intelligence"
         right={
           <View style={styles.headerActions}>
-            <LiveBadge online={predictions !== null && error === null} />
+            <LiveBadge state={connection} />
             <HeaderIconButton
               ios="info.circle"
               android="info"
@@ -266,7 +310,7 @@ export default function DashboardScreen() {
         Data-dependent region. Loading, failure and "not enough history" are three
         distinct states, and only the middle one is an error.
       */}
-      {loading ? <LoadingCard /> : null}
+      {loading ? <LoadingCard waking={waking} /> : null}
 
       {!loading && error ? <ErrorCard message={error} onRetry={retry} /> : null}
 
@@ -421,10 +465,11 @@ export default function DashboardScreen() {
         Premium insights — Bayesian positional model over the 6-digit first
         prize, rendered live.
 
-        FOUNDER MODE: the lock is intentionally removed so the math and layout
-        can be tested on device. The badge is honest about that — this is not a
-        paid tier yet, and the real gate will be a server-side entitlement check,
-        never a client flag.
+        PREMIUM MODE: gated behind `PremiumGate` for the beta, so the math and
+        layout can still be tested without handing them to every tester. The gate
+        is a beta door, not access control — this is a static build and the
+        endpoint is public — so a paid tier still needs a server-side entitlement
+        check rather than a client flag.
       */}
       <Card>
         <SectionHeader
@@ -433,12 +478,14 @@ export default function DashboardScreen() {
           action={
             <View style={[styles.premiumPill, { borderColor: `${colors.gold}80` }]}>
               <ThemedText type="small" style={[styles.premiumPillText, { color: colors.accent }]}>
-                ✨ FOUNDER MODE
+                ✨ PREMIUM MODE
               </ThemedText>
             </View>
           }
         />
-        <PremiumInsightsPanel />
+        <PremiumGate>
+          <PremiumInsightsPanel />
+        </PremiumGate>
       </Card>
 
       {/*
@@ -473,29 +520,46 @@ export default function DashboardScreen() {
  *
  * Reports whether the live model actually answered, rather than always claiming
  * "LIVE" — a permanently lit badge above an error card is a lie the user cannot
- * see through.
+ * see through. Equally, it does not claim "OFFLINE" on a server that simply has
+ * not answered yet: see `ConnectionState`.
  */
-function LiveBadge({ online }: { online: boolean }) {
+function LiveBadge({ state }: { state: ConnectionState }) {
   const { colors } = useAppTheme();
+  const dot = {
+    live: colors.success,
+    connecting: colors.neutral,
+    waking: colors.warning,
+    offline: colors.danger,
+  }[state];
+
   return (
     <View style={[styles.liveBadge, { backgroundColor: colors.backgroundElement }]}>
-      <View style={[styles.liveDot, { backgroundColor: online ? colors.success : colors.neutral }]} />
+      <View style={[styles.liveDot, { backgroundColor: dot }]} />
       <ThemedText type="small" style={[styles.liveText, { color: colors.textSecondary }]}>
-        {online ? 'LIVE' : 'OFFLINE'}
+        {CONNECTION_LABEL[state]}
       </ThemedText>
     </View>
   );
 }
 
-/** Shown while the request is in flight. */
-function LoadingCard() {
+/**
+ * Shown while the request is in flight.
+ *
+ * `waking` is the second half of that wait: the first attempt already timed out,
+ * which on this deployment almost always means the free instance spun down and is
+ * booting. Naming it turns an unexplained hang into a wait the user can decide to
+ * sit through.
+ */
+function LoadingCard({ waking }: { waking: boolean }) {
   const { colors } = useAppTheme();
   return (
     <Card>
       <View style={styles.stateBody}>
         <ActivityIndicator color={colors.primary} />
         <ThemedText type="small" themeColor="textSecondary" style={styles.stateText}>
-          กำลังโหลดผลวิเคราะห์จากเซิร์ฟเวอร์…
+          {waking
+            ? 'กำลังปลุกเซิร์ฟเวอร์… (เซิร์ฟเวอร์สลีปอยู่ อาจใช้เวลาถึง 1 นาที)'
+            : 'กำลังโหลดผลวิเคราะห์จากเซิร์ฟเวอร์…'}
         </ThemedText>
         <ThemedText type="small" themeColor="textMuted" style={styles.stateHint}>
           {BASE_URL}/api/predict/basic
