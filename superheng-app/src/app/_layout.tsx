@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { useAppTheme } from '@/hooks/use-app-theme';
+import { LanguageProvider } from '@/lib/i18n';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -43,19 +44,23 @@ export default function RootLayout() {
   };
 
   return (
-    <ThemeProvider value={navigationTheme}>
-      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-      <AnimatedSplashOverlay />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: colors.background },
-        }}>
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="about" options={MODAL_SCREEN_OPTIONS} />
-        <Stack.Screen name="donate" options={MODAL_SCREEN_OPTIONS} />
-        <Stack.Screen name="premium" options={MODAL_SCREEN_OPTIONS} />
-      </Stack>
-    </ThemeProvider>
+    // Language sits above the navigator so every screen, modal and header shares one
+    // language — a per-screen provider would let them disagree.
+    <LanguageProvider>
+      <ThemeProvider value={navigationTheme}>
+        <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+        <AnimatedSplashOverlay />
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: colors.background },
+          }}>
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="about" options={MODAL_SCREEN_OPTIONS} />
+          <Stack.Screen name="donate" options={MODAL_SCREEN_OPTIONS} />
+          <Stack.Screen name="premium" options={MODAL_SCREEN_OPTIONS} />
+        </Stack>
+      </ThemeProvider>
+    </LanguageProvider>
   );
 }

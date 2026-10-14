@@ -4,6 +4,7 @@ import { Platform, StyleSheet, type ColorValue } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
+import { useTranslation } from '@/lib/i18n';
 
 type TabIconProps = {
   ios: SFSymbol;
@@ -21,6 +22,7 @@ function TabIcon({ ios, android, color, size }: TabIconProps) {
 
 export default function TabsLayout() {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
 
   return (
     <Tabs
@@ -44,7 +46,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Dashboard',
+          title: t('nav.dashboard'),
           tabBarIcon: ({ color, size }) => (
             <TabIcon ios="house.fill" android="home" color={color} size={size} />
           ),
@@ -53,7 +55,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="my-number"
         options={{
-          title: 'My Number',
+          title: t('nav.myNumber'),
           tabBarIcon: ({ color, size }) => (
             <TabIcon ios="magnifyingglass" android="search" color={color} size={size} />
           ),
@@ -62,7 +64,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="insights"
         options={{
-          title: 'Insights',
+          title: t('nav.insights'),
           tabBarIcon: ({ color, size }) => (
             <TabIcon ios="square.grid.2x2.fill" android="grid_view" color={color} size={size} />
           ),
@@ -71,7 +73,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="performance"
         options={{
-          title: 'Performance',
+          title: t('nav.performance'),
           tabBarIcon: ({ color, size }) => (
             <TabIcon
               ios="chart.line.uptrend.xyaxis"

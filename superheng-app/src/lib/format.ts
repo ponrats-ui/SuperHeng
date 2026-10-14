@@ -1,5 +1,7 @@
 /** Small display formatters shared across SuperHeng screens. */
 
+import type { Language } from '@/lib/i18n';
+
 /** Formats an integer with thousands separators (1234 -> "1,234"). */
 export function formatCount(value: number): string {
   return Math.round(value).toLocaleString('en-US');
@@ -16,11 +18,16 @@ export function formatDelta(value: number, digits = 1): string {
   return `${sign}${Math.abs(value).toFixed(digits)}`;
 }
 
+/** "12 Oct 2026" — the Gregorian form every non-Thai locale uses here. */
+function formatEnglishDate(date: Date): string {
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
 /** Formats an ISO date as a compact "12 Oct 2026". */
 export function formatDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  return formatEnglishDate(date);
 }
 
 const THAI_MONTHS = [
@@ -55,9 +62,20 @@ export function formatThaiDate(date: Date): string {
   return `${date.getDate()} ${month} ${date.getFullYear() + BUDDHIST_ERA_OFFSET}`;
 }
 
-/** Relative "3 Days ago" style label. */
-export function formatRelativeDays(daysAgo: number): string {
-  if (daysAgo <= 0) return 'Today';
-  if (daysAgo === 1) return '1 day ago';
-  return `${daysAgo} days ago`;
+/**
+ * Formats a date for the language currently in use.
+ *
+ * This is the one to reach for in screens: English reads "16 Oct 2026" while Thai
+ * reads "16 ตุลาคม 2569" — the same day, in the Buddhist Era and with Thai month
+ * names. A date is locale data, not a string to translate, so it is formatted here
+ * rather than run through the dictionary.
+ *
+ * Accepts an ISO string or a `Date` so call sites do not have to convert, and
+ * returns the input unchanged if it cannot be parsed — the same tolerant behaviour
+ * as `formatDate`.
+ */
+export function formatLocalizedDate(value: string | Date, language: Language): string {
+  const date = typeof value === 'string' ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return typeof value === 'string' ? value : '';
+  return language === 'th' ? formatThaiDate(date) : formatEnglishDate(date);
 }

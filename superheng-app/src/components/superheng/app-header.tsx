@@ -1,5 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 
+import { LanguageToggle } from '@/components/superheng/language-toggle';
 import { ThemedText } from '@/components/themed-text';
 import { Brand, Radius, Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
@@ -10,7 +11,14 @@ export type AppHeaderProps = {
   right?: React.ReactNode;
 };
 
-/** Branded screen header: monogram + wordmark + optional trailing slot. */
+/**
+ * Branded screen header: monogram + wordmark + optional trailing slot.
+ *
+ * The **language switch lives here**, not in each screen: it belongs on every tab,
+ * and four copies of it would drift — one screen would eventually be added without
+ * it. The wordmark and monogram are deliberately not translated; "SuperHeng" is the
+ * product name and reads the same in both languages.
+ */
 export function AppHeader({ subtitle, right }: AppHeaderProps) {
   const { colors } = useAppTheme();
 
@@ -20,7 +28,7 @@ export function AppHeader({ subtitle, right }: AppHeaderProps) {
         <View style={styles.monogram}>
           <ThemedText style={styles.monogramText}>H</ThemedText>
         </View>
-        <View>
+        <View style={styles.identityText}>
           <View style={styles.wordmarkRow}>
             <ThemedText style={styles.wordmark}>Super</ThemedText>
             <ThemedText style={[styles.wordmark, { color: colors.gold }]}>Heng</ThemedText>
@@ -32,7 +40,11 @@ export function AppHeader({ subtitle, right }: AppHeaderProps) {
           ) : null}
         </View>
       </View>
-      {right}
+
+      <View style={styles.trailing}>
+        {right}
+        <LanguageToggle />
+      </View>
     </View>
   );
 }
@@ -49,6 +61,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
     flexShrink: 1,
+  },
+  identityText: {
+    flexShrink: 1,
+  },
+  trailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    flexShrink: 0,
   },
   monogram: {
     width: 36,

@@ -13,6 +13,11 @@ supplies and fails loudly when the result is not usable.
 
 What it asserts
 ---------------
+``--type`` chooses which ledger the checks describe (``thai`` by default, or
+``laos`` / ``vietnam``). That is not cosmetic: without it the script reads all
+three ledgers at once, so a Lao job would measure its own staleness against a Thai
+draw and check its prize width against whichever country happened to be newest.
+
 1. **The ledger is not empty.** Zero rows is the explicit failure mode: either
    the write never happened, or the credentials cannot see it.
 2. **The newest draw is recent.** A ledger that stops advancing is the quiet
@@ -22,9 +27,10 @@ What it asserts
    are at most 15 days apart, the job also runs on the 1st/2nd and 16th/17th as
    fallbacks, and a draw can be published late. 45 days means two whole draw
    cycles were missed before it complains, so it does not cry wolf.
-3. **The newest row is well formed** — a 6-digit รางวัลที่ 1 and a 2-digit
-   เลขท้าย 2 ตัว, the same shape ``scraper.validate_draw`` enforces on the way in.
-   This catches a partial or altered write that a row count alone would miss.
+3. **The newest row is well formed** — a first prize of the width that ledger uses
+   (6 digits for Thai and Lao, 5 for Vietnam's giải đặc biệt) and a 2-digit bottom
+   prize, the same shape the ingestion enforces on the way in. This catches a
+   partial or altered write that a row count alone would miss.
 
 Reaching the database
 ---------------------
@@ -39,7 +45,8 @@ Usage (from the repository root, exactly as the workflow invokes it)::
 
     python backend/verify_ingestion.py
     python backend/verify_ingestion.py --max-staleness-days 20
-    python backend/verify_ingestion.py --min-rows 400
+    python backend/verify_ingestion.py --type laos
+    python backend/verify_ingestion.py --type vietnam --min-rows 400
 
 Exits 0 when the ledger is usable and 1 otherwise, emitting ``::error::`` lines
 so a failure is legible in the Actions summary rather than buried in the log.
@@ -59,9 +66,23 @@ from scraper import TABLE_NAME, IngestionError, create_supabase_client
 
 log = logging.getLogger("superheng.verify_ingestion")
 
-# The shape scraper.validate_draw enforces on the way in. Re-checking it here is
-# the point: a row that is present but malformed is not a successful ingestion.
-FIRST_PRIZE_RE = re.compile(r"^\d{6}$")
+# How wide each ledger's first prize is, so the shape check is the right shape for
+# the country being verified. A Vietnam row that is 6 digits is as wrong as a Thai
+# row that is 5 — see `PRIZE_DIGITS` below.
+#
+# This constant exists in three places — here, `scraper.PRIZE_DIGITS` (what gets
+# written) and `main.LOTTERY_PRIZE_DIGITS` (what gets modelled) — which is a smell
+# that would normally be fixed by importing one from another. It is not, because
+# `main` deliberately keeps its import graph light for Render cold starts, and
+# `verify_ingestion` imports only `scraper` so it stays runnable in CI without the
+# model stack. Instead the agreement is *asserted*: see
+# `test_international_scraper.test_the_scraper_and_the_api_agree_on_how_wide_each_ledger_is`,
+# which fails the moment the three drift apart.
+PRIZE_DIGITS: dict[str, int] = {"thai": 6, "laos": 6, "vietnam": 5}
+LOTTERY_TYPES: tuple[str, ...] = tuple(PRIZE_DIGITS)
+
+# The shape the ingestion enforces on the way in. Re-checking it here is the
+# point: a row that is present but malformed is not a successful ingestion.
 BOTTOM_TWO_RE = re.compile(r"^\d{2}$")
 
 DEFAULT_MIN_ROWS = 1
@@ -90,8 +111,8 @@ class LedgerState:
     newest_bottom_two: str | None
 
 
-def count_rows(client: Any) -> int:
-    """Count the ledger exactly, by paging.
+def count_rows(client: Any, lottery_type: str = "thai") -> int:
+    """Count one ledger exactly, by paging.
 
     ``APIResponse.count`` is ``None`` unless a count is requested, and this
     postgrest release has no way to request one, so an aggregate query would
@@ -103,6 +124,7 @@ def count_rows(client: Any) -> int:
         response = (
             client.table(TABLE_NAME)
             .select("draw_date")
+            .eq("lottery_type", lottery_type)
             .order("draw_date")
             .range(total, total + PAGE_SIZE - 1)
             .execute()
@@ -118,11 +140,12 @@ def count_rows(client: Any) -> int:
     )
 
 
-def newest_row(client: Any) -> dict[str, Any]:
-    """Return the most recent draw, or ``{}`` when the table is empty."""
+def newest_row(client: Any, lottery_type: str = "thai") -> dict[str, Any]:
+    """Return one ledger's most recent draw, or ``{}`` when it is empty."""
     response = (
         client.table(TABLE_NAME)
         .select("draw_date,first_prize,bottom_two")
+        .eq("lottery_type", lottery_type)
         .order("draw_date", desc=True)
         .limit(1)
         .execute()
@@ -131,11 +154,12 @@ def newest_row(client: Any) -> dict[str, Any]:
     return data[0] if data else {}
 
 
-def oldest_draw_date(client: Any) -> str | None:
-    """Return the earliest draw date, or ``None`` when the table is empty."""
+def oldest_draw_date(client: Any, lottery_type: str = "thai") -> str | None:
+    """Return one ledger's earliest draw date, or ``None`` when it is empty."""
     response = (
         client.table(TABLE_NAME)
         .select("draw_date")
+        .eq("lottery_type", lottery_type)
         .order("draw_date")
         .limit(1)
         .execute()
@@ -144,13 +168,13 @@ def oldest_draw_date(client: Any) -> str | None:
     return data[0].get("draw_date") if data else None
 
 
-def fetch_ledger_state(client: Any) -> LedgerState:
-    """Read everything the checks need in one pass."""
-    count = count_rows(client)
-    latest = newest_row(client)
+def fetch_ledger_state(client: Any, lottery_type: str = "thai") -> LedgerState:
+    """Read everything the checks need for one ledger, in one pass."""
+    count = count_rows(client, lottery_type)
+    latest = newest_row(client, lottery_type)
     return LedgerState(
         rows=count,
-        oldest=oldest_draw_date(client),
+        oldest=oldest_draw_date(client, lottery_type),
         newest=latest.get("draw_date"),
         newest_first_prize=latest.get("first_prize"),
         newest_bottom_two=latest.get("bottom_two"),
@@ -168,6 +192,7 @@ def check_ledger(
     today: date,
     min_rows: int = DEFAULT_MIN_ROWS,
     max_staleness_days: int = DEFAULT_MAX_STALENESS_DAYS,
+    lottery_type: str = "thai",
 ) -> list[str]:
     """Return the problems that make the ledger unusable; empty means healthy.
 
@@ -178,10 +203,10 @@ def check_ledger(
 
     if state.rows < min_rows:
         problems.append(
-            f"the ledger holds {state.rows} row(s) but {min_rows} are required — the "
-            "scrape wrote nothing these credentials can see. Confirm SUPABASE_KEY is "
-            "the service_role key (schema.sql grants SELECT only, so anon cannot "
-            "insert) and that schema.sql has been applied to this project."
+            f"the {lottery_type} ledger holds {state.rows} row(s) but {min_rows} are "
+            "required — the scrape wrote nothing these credentials can see. Confirm "
+            "SUPABASE_KEY is the service_role key (schema.sql grants SELECT only, so "
+            "anon cannot insert) and that schema.sql has been applied to this project."
         )
         # Staleness and shape say nothing useful about an empty ledger.
         return problems
@@ -216,17 +241,19 @@ def check_ledger(
             "publishing. Compare against the draw count the previous step reported."
         )
 
-    if not FIRST_PRIZE_RE.match(state.newest_first_prize or ""):
+    digits = PRIZE_DIGITS.get(lottery_type, 6)
+    if not re.fullmatch(rf"\d{{{digits}}}", state.newest_first_prize or ""):
         problems.append(
-            f"the newest row's first_prize is {state.newest_first_prize!r}, not six "
-            "digits. schema.sql constrains this, so a mismatch means the row was not "
-            "written by scraper.py."
+            f"the newest {lottery_type} row's first_prize is "
+            f"{state.newest_first_prize!r}, not {digits} digits. schema.sql constrains "
+            "this, so a mismatch means the row was not written by this project's "
+            "ingestion (or that the wrong ledger was read)."
         )
     if not BOTTOM_TWO_RE.match(state.newest_bottom_two or ""):
         problems.append(
-            f"the newest row's bottom_two is {state.newest_bottom_two!r}, not two "
-            "digits. GLO draws this prize separately, so a wrong shape here corrupts "
-            "the ledger the models train on."
+            f"the newest {lottery_type} row's bottom_two is "
+            f"{state.newest_bottom_two!r}, not two digits, so the ledger the models "
+            "train on is corrupt."
         )
 
     return problems
@@ -257,6 +284,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "Read the lottery_draws ledger back and fail if the ingestion did not "
             "leave it usable."
         ),
+    )
+    parser.add_argument(
+        "--type",
+        choices=LOTTERY_TYPES,
+        default="thai",
+        help="which ledger to verify (default: thai)",
     )
     parser.add_argument(
         "--min-rows",
@@ -309,7 +342,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     try:
-        state = fetch_ledger_state(client)
+        state = fetch_ledger_state(client, args.type)
     except IngestionError as exc:
         _fail(str(exc))
         return 1
@@ -325,11 +358,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         today=today,
         min_rows=args.min_rows,
         max_staleness_days=args.max_staleness_days,
+        lottery_type=args.type,
     )
 
     log.info(
-        "Ledger %s: %d row(s), %s -> %s",
+        "Ledger %s (%s): %d row(s), %s -> %s",
         TABLE_NAME,
+        args.type,
         state.rows,
         state.oldest,
         state.newest,
@@ -350,9 +385,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"::error::{problem}", flush=True)
         return 1
 
-    log.info("Ingestion verified: the ledger is populated and current.")
+    log.info("Ingestion verified: the %s ledger is populated and current.", args.type)
     print(
-        f"::notice::Ledger verified — {state.rows} row(s), newest {state.newest}.",
+        f"::notice::{args.type} ledger verified — {state.rows} row(s), newest "
+        f"{state.newest}.",
         flush=True,
     )
     return 0

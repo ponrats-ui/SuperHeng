@@ -6,6 +6,7 @@ import { HeaderIconButton } from '@/components/superheng/header-icon-button';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
+import { useTranslation } from '@/lib/i18n';
 
 /**
  * Closes the current modal.
@@ -48,8 +49,10 @@ export type ModalScaffoldProps = {
 export function ModalScaffold({ eyebrow, children, scrollRef }: ModalScaffoldProps) {
   const { colors } = useAppTheme();
 
+  const { t } = useTranslation();
+
   const closeButton = (
-    <HeaderIconButton ios="xmark" android="close" label="ปิด" onPress={closeModal} />
+    <HeaderIconButton ios="xmark" android="close" label={t('common.close')} onPress={closeModal} />
   );
 
   if (Platform.OS === 'web') {
@@ -58,7 +61,7 @@ export function ModalScaffold({ eyebrow, children, scrollRef }: ModalScaffoldPro
         {/* Tapping outside the panel dismisses the overlay. */}
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="ปิด"
+          accessibilityLabel={t('common.close')}
           onPress={closeModal}
           style={[StyleSheet.absoluteFill, { backgroundColor: colors.overlay }]}
         />

@@ -3,11 +3,7 @@ import { Image, StyleSheet, View } from 'react-native';
 import { Card, ModalScaffold } from '@/components/superheng';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
-
-const THANK_YOU =
-  'ทุกการสนับสนุนของท่านช่วยให้ทีมงานพัฒนาระบบวิเคราะห์ และปรับปรุงโมเดลให้ดียิ่งขึ้น ขอบคุณจากใจจริง 🙏';
-
-const QR_CAPTION = 'สแกน QR เพื่อเลี้ยงกาแฟทีมงาน';
+import { useTranslation } from '@/lib/i18n';
 
 /**
  * The bundled asset is 885x1200. Its display height is computed from that ratio
@@ -26,20 +22,19 @@ const QR_DISPLAY_HEIGHT = Math.round((QR_DISPLAY_WIDTH * 1200) / 885);
  * details unless they deliberately ask for them.
  */
 export default function DonateScreen() {
+  const { t } = useTranslation();
+
   return (
-    <ModalScaffold eyebrow="SUPPORT THE DEVELOPERS">
+    <ModalScaffold eyebrow={t('donate.eyebrow')}>
       <View style={styles.titleBlock}>
         <ThemedText style={styles.titleEmoji}>☕</ThemedText>
         <View style={styles.titleText}>
-          <ThemedText style={styles.titleThai}>สนับสนุนนักพัฒนา</ThemedText>
-          <ThemedText type="small" themeColor="textMuted" style={styles.titleEn}>
-            Thank you for your support
-          </ThemedText>
+          <ThemedText style={styles.title}>{t('donate.title')}</ThemedText>
         </View>
       </View>
 
       <Card>
-        <ThemedText style={styles.thanks}>{THANK_YOU}</ThemedText>
+        <ThemedText style={styles.thanks}>{t('donate.thanks')}</ThemedText>
       </Card>
 
       <Card>
@@ -50,16 +45,16 @@ export default function DonateScreen() {
             style={styles.qr}
             resizeMode="contain"
             accessibilityRole="image"
-            accessibilityLabel="QR code สำหรับสนับสนุนนักพัฒนา"
+            accessibilityLabel={t('donate.qrA11y')}
           />
         </View>
         <ThemedText type="small" themeColor="textSecondary" style={styles.caption}>
-          {QR_CAPTION}
+          {t('donate.qrCaption')}
         </ThemedText>
       </Card>
 
       <ThemedText type="small" themeColor="textMuted" style={styles.note}>
-        การสนับสนุนเป็นไปโดยความสมัครใจ และไม่มีผลต่อผลการออกรางวัลหรือคะแนน Heng Score
+        {t('donate.note')}
       </ThemedText>
     </ModalScaffold>
   );
@@ -80,15 +75,12 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     gap: 2,
   },
-  titleThai: {
-    // Thai tone marks need a taller line box than Latin text at the same size.
+  title: {
+    // Thai tone marks need a taller line box than Latin text at the same size;
+    // the English copy inherits the extra height harmlessly.
     fontSize: 20,
     lineHeight: 34,
     fontWeight: '800',
-  },
-  titleEn: {
-    fontSize: 12,
-    letterSpacing: 0.4,
   },
 
   thanks: {

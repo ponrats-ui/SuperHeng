@@ -4,6 +4,7 @@ export * from './chart-primitives';
 export * from './countdown';
 export * from './header-icon-button';
 export * from './heatmap';
+export * from './language-toggle';
 export * from './locked-panel';
 export * from './modal-scaffold';
 export * from './model-status-chips';

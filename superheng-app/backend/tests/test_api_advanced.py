@@ -53,14 +53,22 @@ def ledger_rows(count: int, seed: int = 20261013) -> list[dict]:
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """A client whose database is stubbed but whose models are real."""
     monkeypatch.setattr(main, "get_supabase", lambda: object())
-    monkeypatch.setattr(main, "fetch_draw_history", lambda _client, limit: ledger_rows(limit))
+    monkeypatch.setattr(
+        main,
+        "fetch_draw_history",
+        lambda _client, limit, _type=main.LotteryType.thai: ledger_rows(limit),
+    )
     return TestClient(main.app)
 
 
 @pytest.fixture()
 def empty_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(main, "get_supabase", lambda: object())
-    monkeypatch.setattr(main, "fetch_draw_history", lambda _client, limit: [])
+    monkeypatch.setattr(
+        main,
+        "fetch_draw_history",
+        lambda _client, limit, _type=main.LotteryType.thai: [],
+    )
     return TestClient(main.app)
 
 
@@ -283,7 +291,11 @@ def test_a_model_failure_becomes_a_500_with_detail(monkeypatch: pytest.MonkeyPat
     import models
 
     monkeypatch.setattr(main, "get_supabase", lambda: object())
-    monkeypatch.setattr(main, "fetch_draw_history", lambda _client, limit: ledger_rows(limit))
+    monkeypatch.setattr(
+        main,
+        "fetch_draw_history",
+        lambda _client, limit, _type=main.LotteryType.thai: ledger_rows(limit),
+    )
 
     def explode(*args, **kwargs):
         raise RuntimeError("ensemble exploded")
@@ -305,7 +317,9 @@ def test_a_model_failure_becomes_a_500_with_detail(monkeypatch: pytest.MonkeyPat
 def test_a_database_failure_becomes_a_500_with_detail(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(main, "get_supabase", lambda: object())
 
-    def explode(_client, _limit):
+    # This endpoint does not name a country, so the type stays at its Thai default
+    # and the stub takes it as an optional argument.
+    def explode(_client, _limit, _type=None):
         raise RuntimeError("PGRST205 could not find the table")
 
     monkeypatch.setattr(main, "fetch_draw_history", explode)

@@ -85,6 +85,69 @@ curl -s https://superheng-api.onrender.com/api/health
 
 Expect HTTP 200 and `"supabase": "configured"`.
 
+### The database migration must run before the multi-country API is deployed
+
+The API now filters every draw query by `lottery_type`, and the preset Thai ledger
+(Premium Insights) exposes a `?type=thai|laos|vietnam` parameter. That column and
+the composite key only exist once **`backend/schema.sql` has been applied**
+(Supabase → SQL Editor → paste the file → **Run**; it is idempotent, so re-running
+is safe and it backfills existing rows as `'thai'`).
+
+Run it **before** deploying or restarting the API. Without it every prediction
+endpoint — not just Premium — answers `500` with
+`column lottery_draws.lottery_type does not exist` (`42703`), because
+`fetch_draw_history` filters on the column for all of them:
+
+```bash
+# Must return the positional payload, not a 500.
+curl -s "https://superheng-api.onrender.com/api/predict/premium?type=thai" | head -c 200
+```
+
+The migration is additive: it adds a column with a default, drops the old
+`draw_date` unique constraint and replaces it with a unique index on
+`(lottery_type, draw_date)`. `backend/scraper.py`'s `CONFLICT_TARGET` already
+matches the new index, so Thai ingestion keeps working across the change.
+
+It also **widens `first_prize` from exactly 6 digits to 5 or 6**, because
+Vietnam's giải đặc biệt is a five-digit number and is stored as one: padding it to
+six would put a permanent `0` at the leading position, which the premium model
+would publish as a position with a 100% posterior. Thai and Lao rows are unaffected
+— 6 digits is still valid — but a ledger that still carries the old
+`lottery_draws_first_prize_is_6_digits` constraint will reject every Vietnamese row
+with `23514`, so apply the file before running the Vietnamese ingestion.
+
+### Ingestion now covers three ledgers, from one workflow
+
+`.github/workflows/auto_scraper.yml` runs one job per ledger, each on its own
+schedule and each gated on which cron entry fired:
+
+| Ledger | Script | Schedule |
+| --- | --- | --- |
+| `thai` | `backend/scraper.py` | 1st, 2nd, 16th, 17th at 10:30 UTC |
+| `vietnam` | `backend/scripts/scrape_international.py --type vietnam` | daily at 12:15 UTC |
+| `laos` | `backend/scripts/scrape_international.py --type laos` | Mon-Fri at 14:30 UTC |
+
+Every path in that file is `superheng-app/backend/...`, which is the directory
+Render deploys (`rootDir` in `render.yaml`). The same workflow also exists at
+`superheng-app/.github/workflows/auto_scraper.yml`, where it never runs: GitHub
+reads workflows only from the repository-root `.github/`.
+
+Each job then reads its own ledger back with
+`backend/verify_ingestion.py --type <ledger>` and fails the run if the write did
+not land — a green scrape only proves the rows were *sent*.
+
+The routine window is the last 14 draw dates, because both international sources
+are addressed one date at a time. Backfilling history is a deliberate run:
+
+```bash
+python backend/scripts/scrape_international.py --dry-run --days 30
+python backend/scripts/scrape_international.py --type vietnam --from 2025-10-01
+```
+
+Run `--dry-run` first when a source changes: it fetches, validates and prints the
+rows without writing, which is how both parsers were verified against the live
+sites on 2026-10-14.
+
 **That 200 does not mean the credentials work.** `/api/health` always answers 200
 and reports only whether the two variables are *present*; it never queries the
 database. Render uses this same endpoint as its health check, so a service whose

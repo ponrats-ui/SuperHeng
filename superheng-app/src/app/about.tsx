@@ -4,51 +4,48 @@ import { Card, ModalScaffold } from '@/components/superheng';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
-
-/** Framing sentence that leads into the model list. */
-const INTRO =
-  'เราใช้ข้อมูลสถิติผลการออกรางวัลย้อนหลังจาก "สำนักงานสลากกินแบ่งรัฐบาล (GLO)" มาประมวลผลผ่านโมเดลคณิตศาสตร์และ AI ขั้นสูง ดังนี้:';
+import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
 /**
  * The four models the ensemble actually runs.
  *
  * Names deliberately match the engine labels on the dashboard's model panel so
- * the explainer and the product tell the same story.
+ * the explainer and the product tell the same story. Both the name and the
+ * description are translation keys, so switching language re-renders the list in
+ * place — the copy itself used to be a Thai paragraph with English model names
+ * inside it.
  */
-const MODELS = [
+const MODELS: readonly {
+  key: string;
+  emoji: string;
+  nameKey: TranslationKey;
+  bodyKey: TranslationKey;
+}[] = [
   {
     key: 'time-series',
     emoji: '📈',
-    name: 'Time Series (ARIMA & Prophet):',
-    body: 'วิเคราะห์ความสัมพันธ์ของตัวเลขตามเวลา และจับ "ฤดูกาล" เช่น เลขที่มักออกบ่อยในช่วงเดือนหรือวันหยุดนี้',
+    nameKey: 'about.modelTimeseriesName',
+    bodyKey: 'about.modelTimeseriesBody',
   },
   {
     key: 'markov-chains',
     emoji: '🔗',
-    name: 'Markov Chains:',
-    body: 'สร้างตารางความน่าจะเป็น เพื่อดูว่าถ้างวดที่แล้วออกเลขนี้ โอกาสงวดถัดไปจะเปลี่ยนสถานะไปที่เลขกลุ่มใดมากที่สุด',
+    nameKey: 'about.modelMarkovName',
+    bodyKey: 'about.modelMarkovBody',
   },
   {
     key: 'monte-carlo',
     emoji: '🎲',
-    name: 'Monte Carlo Simulation:',
-    body: 'ให้คอมพิวเตอร์จำลองการสุ่มออกรางวัลล่วงหน้านับแสนครั้ง โดยอิงน้ำหนักจากสถิติ 20 ปี เลขที่ชนะบ่อยที่สุดจะได้รับคะแนนสูงสุด',
+    nameKey: 'about.modelMontecarloName',
+    bodyKey: 'about.modelMontecarloBody',
   },
   {
     key: 'deep-learning',
     emoji: '🧠',
-    name: 'Deep Learning (LSTM):',
-    body: 'ใช้โครงข่ายประสาทเทียมเรียนรู้แพทเทิร์นที่ซับซ้อนเกินกว่ามนุษย์จะมองเห็น เช่น ความเชื่อมโยงระหว่างรางวัลที่ 1 และเลขท้าย 2 ตัวในอดีต',
+    nameKey: 'about.modelLstmName',
+    bodyKey: 'about.modelLstmBody',
   },
-] as const;
-
-/** Caveat shown at the foot of the explainer. */
-const DISCLAIMER =
-  'คำเตือน: ข้อมูลและคะแนนในแอปพลิเคชันเป็นการวิเคราะห์เชิงสถิติจากข้อมูลย้อนหลัง ไม่ใช่การรับประกันผลการออกรางวัล';
-
-/** Legal footer asserting ownership of the algorithms and data. */
-const COPYRIGHT =
-  '© 2026 SuperHeng. All Rights Reserved. ห้ามคัดลอก ดัดแปลง หรือทำซ้ำอัลกอริทึมและข้อมูลโดยเด็ดขาด';
+];
 
 /**
  * "How SuperHeng works" explainer.
@@ -60,21 +57,19 @@ const COPYRIGHT =
  */
 export default function AboutScreen() {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
 
   const content = (
     <>
       <View style={styles.titleBlock}>
         <ThemedText style={styles.titleEmoji}>💡</ThemedText>
         <View style={styles.titleText}>
-          <ThemedText style={styles.titleThai}>เบื้องหลังการคำนวณความน่าจะเป็น</ThemedText>
-          <ThemedText type="small" themeColor="textMuted" style={styles.titleEn}>
-            How SuperHeng Works
-          </ThemedText>
+          <ThemedText style={styles.title}>{t('about.title')}</ThemedText>
         </View>
       </View>
 
       <Card>
-        <ThemedText style={styles.intro}>{INTRO}</ThemedText>
+        <ThemedText style={styles.intro}>{t('about.intro')}</ThemedText>
 
         <View style={styles.list}>
           {MODELS.map((model) => (
@@ -82,9 +77,9 @@ export default function AboutScreen() {
               <View style={[styles.divider, { backgroundColor: colors.cardBorder }]} />
               <View style={styles.modelHead}>
                 <ThemedText style={styles.modelEmoji}>{model.emoji}</ThemedText>
-                <ThemedText style={styles.modelName}>{model.name}</ThemedText>
+                <ThemedText style={styles.modelName}>{t(model.nameKey)}</ThemedText>
               </View>
-              <ThemedText style={styles.modelBody}>{model.body}</ThemedText>
+              <ThemedText style={styles.modelBody}>{t(model.bodyKey)}</ThemedText>
             </View>
           ))}
         </View>
@@ -97,17 +92,17 @@ export default function AboutScreen() {
         ]}>
         <ThemedText style={styles.noteEmoji}>⚠️</ThemedText>
         <ThemedText type="small" themeColor="textSecondary" style={styles.noteText}>
-          {DISCLAIMER}
+          {t('about.disclaimer')}
         </ThemedText>
       </View>
 
       <ThemedText type="small" themeColor="textMuted" style={styles.copyright}>
-        {COPYRIGHT}
+        {t('about.copyright')}
       </ThemedText>
     </>
   );
 
-  return <ModalScaffold eyebrow="HOW IT WORKS">{content}</ModalScaffold>;
+  return <ModalScaffold eyebrow={t('about.eyebrow')}>{content}</ModalScaffold>;
 }
 
 const styles = StyleSheet.create({
@@ -125,16 +120,13 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     gap: 2,
   },
-  titleThai: {
+  title: {
     // Thai stacks tone marks above and vowel marks below the baseline, so the
     // default line box clips them; this needs a taller line height than Latin.
+    // English copy inherits the extra height harmlessly.
     fontSize: 20,
     lineHeight: 34,
     fontWeight: '800',
-  },
-  titleEn: {
-    fontSize: 12,
-    letterSpacing: 0.4,
   },
 
   // Model list ------------------------------------------------------------

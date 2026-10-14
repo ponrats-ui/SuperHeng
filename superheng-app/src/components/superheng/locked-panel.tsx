@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
+import { useTranslation } from '@/lib/i18n';
 
 export type LockedPanelProps = {
   /** Small uppercase tier label, e.g. "3-DIGIT". */
@@ -38,12 +39,13 @@ export type LockedPanelProps = {
  */
 export function LockedPanel({ badge, title, subtitle, digits, onPress }: LockedPanelProps) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${title} — ปลดล็อกด้วย Premium`}
-      accessibilityHint="เปิดหน้าต่างสมัครสมาชิก Premium"
+      accessibilityLabel={t('premium.unlockWithPremium', { title })}
+      accessibilityHint={t('premium.openSignInForm')}
       onPress={onPress}
       style={({ pressed }) => [
         styles.panel,
@@ -58,7 +60,7 @@ export function LockedPanel({ badge, title, subtitle, digits, onPress }: LockedP
         </View>
         <View style={[styles.lockPill, { backgroundColor: `${colors.gold}1F` }]}>
           <ThemedText type="small" style={[styles.lockText, { color: colors.accent }]}>
-            🔒 PREMIUM
+            {t('premium.lockedPill')}
           </ThemedText>
         </View>
       </View>
@@ -92,7 +94,7 @@ export function LockedPanel({ badge, title, subtitle, digits, onPress }: LockedP
 
       <View style={[styles.footer, { borderTopColor: colors.cardBorder }]}>
         <ThemedText type="small" style={[styles.cta, { color: colors.accent }]}>
-          ปลดล็อกเพื่อดูการวิเคราะห์
+          {t('premium.lockedCta')}
         </ThemedText>
         <ThemedText type="small" style={[styles.arrow, { color: colors.accent }]}>
           →

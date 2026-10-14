@@ -6,7 +6,8 @@ import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing, probabilityColor } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
 import type { RankEntry } from '@/data/mock';
-import { formatDelta, formatRelativeDays } from '@/lib/format';
+import { formatDelta } from '@/lib/format';
+import { useTranslation } from '@/lib/i18n';
 
 export type RankRowProps = {
   rank: number;
@@ -34,7 +35,15 @@ export type RankRowProps = {
  */
 export function RankRow({ rank, entry }: RankRowProps) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
   const tone = probabilityColor(entry.score);
+  const lastSeen = entry.lastSeenDays ?? 0;
+  // `lastSeenDays` is data, so the phrasing around it is a dictionary string: Thai
+  // says "วันนี้" rather than "Today", and has no plural form to pick.
+  const seen =
+    lastSeen <= 0
+      ? t('common.today')
+      : t('common.daysAgo', { count: lastSeen });
   // `delta` is 0.0 until the backend persists a previous model run, so zero is
   // "no movement recorded", not "moved up". Treating it as positive would paint
   // every row with a green up-arrow and invent a signal the models never
@@ -78,7 +87,7 @@ export function RankRow({ rank, entry }: RankRowProps) {
             </View>
           </View>
           <ThemedText type="small" themeColor="textMuted" style={styles.meta}>
-            Heng {entry.score} · {formatRelativeDays(entry.lastSeenDays ?? 0)}
+            {t('rank.meta', { score: entry.score, seen })}
           </ThemedText>
         </View>
 

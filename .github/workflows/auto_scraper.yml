@@ -1,44 +1,76 @@
 name: Auto Scraper
 
-# Keep the Supabase `lottery_draws` ledger current after every GLO draw.
+# Keep all three `lottery_draws` ledgers current from one workflow, on three
+# schedules, one job each.
 #
-# GLO draws at 16:00 Asia/Bangkok on the 1st and 16th. This job fires at 10:30 UTC
-# (17:30 BKK) — 90 minutes later, so the result is published and the archive page
-# has settled — and also on the 2nd and 17th, because GLO moves a draw by a day in
-# some months (2 Jan, 17 Jan, 2 May) and a site can publish late.
+# GitHub reads only `/.github/workflows/`, and every command below therefore runs
+# from the repository root against `superheng-app/backend` — the directory Render
+# deploys (`rootDir` in render.yaml) and the one the app calls. The same file
+# exists under `superheng-app/.github/workflows/`, where it is inert: a nested
+# `.github` is never executed. This is the copy that runs.
 #
-# Re-running is harmless by design: the ingestion upserts on `draw_date`, so a
-# second pass rewrites the same rows rather than duplicating them. That is also
-# why the extra days cost nothing but a few requests.
+# Each cron entry fires the whole workflow, so each job is gated on *which* entry
+# fired. The string compared against `github.event.schedule` has to match the cron
+# in `on.schedule` character for character, which is why the two are written
+# immediately beside each other rather than in separate files.
+#
+# Every ingestion upserts on `(lottery_type, draw_date)`, so re-running is
+# harmless by design: a second pass rewrites the same rows rather than duplicating
+# them, and that is also why the extra fallback days cost nothing but requests.
 on:
   schedule:
-    # 10:30 UTC = 17:30 Asia/Bangkok (UTC+7), ~90 min after the 16:00 draw.
+    # Thailand — GLO draws at 16:00 Asia/Bangkok on the 1st and 16th. 10:30 UTC is
+    # 17:30 BKK, 90 minutes later, so the result is published and the archive page
+    # has settled. The 2nd and 17th are fallbacks: GLO moves a draw by a day in
+    # some months (2 Jan, 17 Jan, 2 May) and a site can publish late.
     - cron: "30 10 1,2,16,17 * *"
-  workflow_dispatch: {}
+    # Vietnam — XSMB runs daily and publishes from about 18:15 ICT (UTC+7). 12:15
+    # UTC is 19:15 ICT, an hour after the results start appearing.
+    - cron: "15 12 * * *"
+    # Laos — Kapook's dated archive shows draws and results Monday to Friday, with
+    # the draw in the evening. 14:30 UTC is 21:30 ICT, comfortably after it, and
+    # the 1-5 day range keeps ~10 requests a week off the weekend for nothing.
+    - cron: "30 14 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      ledger:
+        description: Which ledger to ingest
+        type: choice
+        options:
+          - all
+          - thai
+          - laos
+          - vietnam
+        default: all
 
-# The job only reads the repository and writes to Supabase over HTTPS.
+# The jobs only read the repository and write to Supabase over HTTPS.
 permissions:
   contents: read
 
-# Never let two ingestions overlap. Without this, a manual dispatch during a
-# scheduled run would race the same upsert against itself.
-concurrency:
-  group: auto-scraper
-  cancel-in-progress: false
-
 jobs:
-  scrape:
-    name: Scrape draws into Supabase
+  thai:
+    name: Scrape the Thai ledger
     runs-on: ubuntu-latest
+    # Runs on its own schedule, or on a manual dispatch that asked for it.
+    if: >-
+      github.event.schedule == '30 10 1,2,16,17 * *'
+      || (github.event_name == 'workflow_dispatch'
+          && (inputs.ledger == 'all' || inputs.ledger == 'thai'))
     # A full 10-year re-scrape is ~13 requests; anything approaching this bound
-    # means the runner is stuck, and a stuck job must not hold the concurrency
-    # lock into the next draw day.
+    # means the runner is stuck, and a stuck job must not hold the lock into the
+    # next draw day.
     timeout-minutes: 30
+    # Per ledger, not per workflow: two countries never write the same rows, so
+    # they need not wait for each other, but two runs of the same country must not
+    # race the same upsert against itself.
+    concurrency:
+      group: ingest-thai
+      cancel-in-progress: false
 
     env:
-      # Read by backend/scraper.py through os.getenv. Values are never printed:
-      # the credentials come from repository secrets, so they stay out of the logs
-      # and out of the checkout.
+      # Read by the scripts through os.getenv. Values are never printed: they come
+      # from repository secrets, so they stay out of the logs and out of the
+      # checkout.
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
 
@@ -51,12 +83,12 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: superheng-app/backend/requirements.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r backend/requirements.txt
+          python -m pip install -r superheng-app/backend/requirements.txt
 
       - name: Verify the Supabase credentials are configured
         # Fail with a clear message instead of letting the scraper discover the
@@ -74,14 +106,142 @@ jobs:
           fi
           echo "Both Supabase secrets are present."
 
-      - name: Run the scraper
+      - name: Run the Thai scraper
         # Invoked from the repository root, exactly as documented in scraper.py's
-        # usage block: `backend/` goes on sys.path by virtue of being the script's
-        # directory, so `import data_ingestion` resolves without any packaging.
+        # usage block: `superheng-app/backend/` goes on sys.path by virtue of being
+        # the script's directory, so `import data_ingestion` resolves without any
+        # packaging.
         #
         # This performs a 10-year backfill and upserts the result, which keeps
-        # recent corrections flowing in and needs no `--fill-gaps` (that is for
-        # deep historical backfills; the routine path has no gaps to look for).
-        # The script exits non-zero when it collects nothing, so a broken source
-        # fails the job rather than silently reporting success.
-        run: python backend/scraper.py
+        # recent corrections flowing in. The script exits non-zero when it collects
+        # nothing, so a broken source fails the job rather than silently reporting
+        # success.
+        run: python superheng-app/backend/scraper.py
+
+      - name: Verify the ledger actually received the data
+        # A zero exit from the scraper only proves it *sent* rows. This step reads
+        # the table back, which is the only way to catch the failures that hide
+        # behind a green scrape: credentials that authenticate but resolve to
+        # another project, a write accepted and discarded by row-level security, or
+        # a source that stopped publishing while the archive walk still succeeded
+        # against stale pages.
+        #
+        # Placement matters — this runs after the write, while the credentials are
+        # still in the environment, and before the job can be reported as passing.
+        run: python superheng-app/backend/verify_ingestion.py --type thai
+
+  vietnam:
+    name: Scrape the Vietnamese (Hanoi) ledger
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.schedule == '15 12 * * *'
+      || (github.event_name == 'workflow_dispatch'
+          && (inputs.ledger == 'all' || inputs.ledger == 'vietnam'))
+    # The default window is 14 draw dates, one request each. Twenty minutes is
+    # several times the measured cost and short enough that a wedged runner
+    # releases the lock before the next day's run.
+    timeout-minutes: 20
+    concurrency:
+      group: ingest-vietnam
+      cancel-in-progress: false
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: superheng-app/backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r superheng-app/backend/requirements.txt
+
+      - name: Verify the Supabase credentials are configured
+        run: |
+          missing=0
+          for name in SUPABASE_URL SUPABASE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set. Add it under Settings > Secrets and variables > Actions."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Both Supabase secrets are present."
+
+      - name: Run the Vietnamese scraper
+        # Daily, over the routine window (the last 14 draw dates). Both sources are
+        # addressed one draw date at a time, so the deep history of either is an
+        # explicit `--from`/`--to` run rather than the default — see the script's
+        # usage block. It exits non-zero when a whole window yields nothing, which
+        # is a broken source rather than a quiet day.
+        run: python superheng-app/backend/scripts/scrape_international.py --type vietnam
+
+      - name: Verify the ledger actually received the data
+        run: python superheng-app/backend/verify_ingestion.py --type vietnam
+
+  laos:
+    name: Scrape the Lao ledger
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.schedule == '30 14 * * 1-5'
+      || (github.event_name == 'workflow_dispatch'
+          && (inputs.ledger == 'all' || inputs.ledger == 'laos'))
+    timeout-minutes: 20
+    concurrency:
+      group: ingest-laos
+      cancel-in-progress: false
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: superheng-app/backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r superheng-app/backend/requirements.txt
+
+      - name: Verify the Supabase credentials are configured
+        run: |
+          missing=0
+          for name in SUPABASE_URL SUPABASE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set. Add it under Settings > Secrets and variables > Actions."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Both Supabase secrets are present."
+
+      - name: Run the Lao scraper
+        # Monday to Friday, over the routine window (the last 14 draw dates; the
+        # walk already skips weekends, so this is ~10 requests). A Lao draw Kapook
+        # has not published yet is a skip, not a failure — the next run picks it up,
+        # because the window is a fortnight rather than a single day.
+        run: python superheng-app/backend/scripts/scrape_international.py --type laos
+
+      - name: Verify the ledger actually received the data
+        run: python superheng-app/backend/verify_ingestion.py --type laos

@@ -3,23 +3,34 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
-import { MODEL_SHORT_LABELS, type ModelStatus } from '@/data/mock';
+import type { ModelStatus } from '@/data/mock';
 import { useAppTheme } from '@/hooks/use-app-theme';
+import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
 /**
- * Friendly wording for the backend's machine-readable `reason` codes.
+ * Translation **keys** for the backend's machine-readable `reason` codes.
  *
- * Kept short because it sits on the chip face; the full measured sentence is
- * always available one tap away.
+ * The backend sends codes (`insufficient_support`), never prose, so this map is a
+ * lookup into the dictionary rather than a copy table — which is why adding a
+ * language costs nothing here. Kept short because the wording sits on the chip
+ * face; the full measured sentence is always available one tap away.
  */
-export const MODEL_REASON_TAGS: Record<string, string> = {
-  applied: 'Applied',
-  weighted_zero: 'Zero weight',
-  insufficient_support: 'Insufficient data',
-  not_in_blend: 'Not in blend',
-  no_observed_transition: 'No pattern',
-  no_arima_fit: 'No pattern',
-  not_reported: 'Not reported',
+export const MODEL_REASON_TAGS: Record<string, TranslationKey> = {
+  applied: 'models.applied',
+  weighted_zero: 'models.weightedZero',
+  insufficient_support: 'models.insufficientSupport',
+  not_in_blend: 'models.notInBlend',
+  no_observed_transition: 'models.noObservedTransition',
+  no_arima_fit: 'models.noArimaFit',
+  not_reported: 'models.notReported',
+};
+
+/** The four model keys, mapped to their short chip labels. */
+const MODEL_SHORT_KEYS: Record<string, TranslationKey> = {
+  frequency: 'models.frequencyShort',
+  markov: 'models.markovShort',
+  timeseries: 'models.timeseriesShort',
+  montecarlo: 'models.montecarloShort',
 };
 
 export type ModelStatusChipsProps = {
@@ -43,11 +54,27 @@ export type ModelStatusChipsProps = {
  */
 export function ModelStatusChips({ statuses }: ModelStatusChipsProps) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   if (!statuses || statuses.length === 0) return null;
 
   const open = statuses.find((status) => status.key === openKey) ?? null;
+
+  /**
+   * Short label for one chip: the localised model name, never the server's.
+   *
+   * `status.label` stays the fallback so a model the app does not know about yet
+   * still shows *something* (the backend's own name) instead of a dictionary key.
+   */
+  const chipLabel = (key: string, fallback: string) => {
+    const short = MODEL_SHORT_KEYS[key];
+    return short ? t(short) : fallback;
+  };
+
+  /** The reason code as human wording, in the current language. */
+  const reasonTag = (reason: string, fallbackKey: TranslationKey) =>
+    t(MODEL_REASON_TAGS[reason] ?? fallbackKey);
 
   return (
     <View style={styles.container}>
@@ -62,9 +89,15 @@ export function ModelStatusChips({ statuses }: ModelStatusChipsProps) {
               onPress={() => setOpenKey(expanded ? null : status.key)}
               accessibilityRole="button"
               accessibilityState={{ expanded }}
-              accessibilityLabel={`${status.label}: ${
-                active ? 'active' : `neutral, ${MODEL_REASON_TAGS[status.reason] ?? 'skipped'}`
-              }. ${status.detail}`}
+              accessibilityLabel={t('models.chipA11y', {
+                label: chipLabel(status.key, status.label),
+                state: active
+                  ? t('models.stateActive')
+                  : t('models.neutralReason', {
+                      reason: reasonTag(status.reason, 'models.skipped'),
+                    }),
+                detail: status.detail,
+              })}
               style={[
                 styles.chip,
                 {
@@ -87,7 +120,7 @@ export function ModelStatusChips({ statuses }: ModelStatusChipsProps) {
               <ThemedText
                 type="small"
                 style={[styles.chipText, { color: active ? colors.accent : colors.textMuted }]}>
-                {MODEL_SHORT_LABELS[status.key] ?? status.label}
+                {chipLabel(status.key, status.label)}
               </ThemedText>
             </Pressable>
           );
@@ -103,9 +136,16 @@ export function ModelStatusChips({ statuses }: ModelStatusChipsProps) {
               { color: open.status === 'active' ? colors.accent : colors.textSecondary },
             ]}>
             {open.status === 'active'
-              ? `${open.label} · ${Math.round(open.weight * 100)}% weight`
-              : `${open.label} · ${MODEL_REASON_TAGS[open.reason] ?? 'Neutral'}`}
+              ? t('models.activeTag', {
+                  label: chipLabel(open.key, open.label),
+                  percent: Math.round(open.weight * 100),
+                })
+              : t('models.neutralTag', {
+                  label: chipLabel(open.key, open.label),
+                  reason: reasonTag(open.reason, 'models.neutral'),
+                })}
           </ThemedText>
+          {/* Punctuation between the tag and the measured sentence, not language. */}
           {` — ${open.detail}`}
         </ThemedText>
       ) : null}

@@ -7,14 +7,7 @@ import { Card, ModalScaffold } from '@/components/superheng';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
-
-/** Requested marketing copy — kept in one place so the paywall can't drift from the spec. */
-const TITLE_TH = 'ปลดล็อกความแม่นยำขั้นสุด!';
-const TITLE_EN = '(Unlock Premium Insights)';
-const FEATURES =
-  'รับการวิเคราะห์เจาะลึกเลข 3 ตัว และเลข 6 ตัว (รางวัลที่ 1) ด้วยโมเดล AI ระดับสูง';
-const PRICE = 'เพียง 99 บาท/เดือน';
-const COMING_SOON = 'ฟีเจอร์นี้กำลังเปิดให้บริการเร็วๆ นี้ (Coming Soon)';
+import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
 /** Text color for the filled gold CTA — dark on both themes, since gold is light in each. */
 const ON_GOLD = '#101422';
@@ -26,11 +19,12 @@ const ON_GOLD = '#101422';
  * apply.
  */
 
-const BENEFITS = [
-  'เลข 3 ตัว (3-Digit) — อันดับและคะแนน Heng รายตำแหน่ง',
-  'เลข 6 ตัว (รางวัลที่ 1) — เปิดให้บริการเมื่อโมเดลขั้นสูงพร้อมใช้งาน',
-  'ประวัติการวิเคราะห์ย้อนหลังแบบเต็ม ไม่จำกัดการเรียกดู',
-] as const;
+/** The benefit list, as keys: rows re-render in the other language without remounting. */
+const BENEFIT_KEYS: readonly TranslationKey[] = [
+  'paywall.benefit1',
+  'paywall.benefit2',
+  'paywall.benefit3',
+];
 
 /**
  * Premium paywall placeholder.
@@ -43,6 +37,7 @@ const BENEFITS = [
  */
 export default function PremiumScreen() {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
   const [comingSoon, setComingSoon] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
@@ -51,7 +46,7 @@ export default function PremiumScreen() {
       setComingSoon(true);
       return;
     }
-    Alert.alert(TITLE_TH, COMING_SOON);
+    Alert.alert(t('paywall.title'), t('paywall.comingSoon'));
   }
 
   // The panel is height-capped, so the confirmation can appear below the fold.
@@ -61,13 +56,15 @@ export default function PremiumScreen() {
   }, [comingSoon]);
 
   return (
-    <ModalScaffold eyebrow="PREMIUM MEMBERSHIP" scrollRef={scrollRef}>
+    <ModalScaffold eyebrow={t('paywall.eyebrow')} scrollRef={scrollRef}>
       <View style={styles.titleBlock}>
         <ThemedText style={styles.titleEmoji}>🔓</ThemedText>
         <View style={styles.titleText}>
-          <ThemedText style={[styles.titleThai, { color: colors.accent }]}>{TITLE_TH}</ThemedText>
-          <ThemedText type="small" themeColor="textMuted" style={styles.titleEn}>
-            {TITLE_EN}
+          {/* One headline in the chosen language, not a Thai title with an English
+              translation beneath it. The tint is the header text colour, which is
+              what the theme's high-contrast rollover expects here. */}
+          <ThemedText style={[styles.title, { color: colors.accent }]}>
+            {t('paywall.title')}
           </ThemedText>
         </View>
       </View>
@@ -76,25 +73,25 @@ export default function PremiumScreen() {
         <View style={[styles.pillRow]}>
           <View style={[styles.pill, { backgroundColor: `${colors.gold}1F` }]}>
             <ThemedText type="small" style={[styles.pillText, { color: colors.accent }]}>
-              🔒 COMING SOON
+              {t('paywall.comingSoonPill')}
             </ThemedText>
           </View>
         </View>
-        <ThemedText style={styles.features}>{FEATURES}</ThemedText>
+        <ThemedText style={styles.features}>{t('paywall.features')}</ThemedText>
       </Card>
 
       <Card>
         <ThemedText type="smallBold" themeColor="textMuted" style={styles.sectionLabel}>
-          สิ่งที่คุณจะได้รับ
+          {t('paywall.benefitsTitle')}
         </ThemedText>
         <View style={styles.benefits}>
-          {BENEFITS.map((benefit) => (
-            <View key={benefit} style={styles.benefitRow}>
+          {BENEFIT_KEYS.map((key) => (
+            <View key={key} style={styles.benefitRow}>
               <ThemedText type="small" style={[styles.check, { color: colors.accent }]}>
                 ✓
               </ThemedText>
               <ThemedText type="small" themeColor="textSecondary" style={styles.benefitText}>
-                {benefit}
+                {t(key)}
               </ThemedText>
             </View>
           ))}
@@ -103,22 +100,26 @@ export default function PremiumScreen() {
 
       <Card>
         <View style={styles.priceBlock}>
-          <ThemedText style={[styles.price, { color: colors.accent }]}>{PRICE}</ThemedText>
+          <ThemedText style={[styles.price, { color: colors.accent }]}>
+            {t('paywall.price')}
+          </ThemedText>
           <ThemedText type="small" themeColor="textMuted" style={styles.priceSub}>
-            ยกเลิกได้ตลอดเวลา · ชำระด้วยบัตรเครดิต
+            {t('paywall.priceSub')}
           </ThemedText>
         </View>
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Subscribe Now"
+          accessibilityLabel={t('paywall.subscribeHint')}
           onPress={handleSubscribe}
           style={({ pressed }) => [
             styles.subscribe,
             { backgroundColor: colors.gold },
             pressed && styles.pressed,
           ]}>
-          <ThemedText style={[styles.subscribeText, { color: ON_GOLD }]}>Subscribe Now</ThemedText>
+          <ThemedText style={[styles.subscribeText, { color: ON_GOLD }]}>
+            {t('paywall.subscribe')}
+          </ThemedText>
         </Pressable>
 
         {comingSoon ? (
@@ -129,28 +130,28 @@ export default function PremiumScreen() {
               { borderColor: `${colors.gold}66`, backgroundColor: `${colors.gold}14` },
             ]}>
             <ThemedText type="small" style={[styles.noticeText, { color: colors.accent }]}>
-              {COMING_SOON}
+              {t('paywall.comingSoon')}
             </ThemedText>
           </View>
         ) : null}
 
         <ThemedText type="small" themeColor="textMuted" style={styles.finePrint}>
-          ยังไม่มีค่าใช้จ่ายใดๆ ในขณะนี้ — การกดสมัครจะยังไม่ถูกเรียกเก็บเงิน
+          {t('paywall.noCharge')}
         </ThemedText>
       </Card>
 
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="ย้อนกลับ"
+        accessibilityLabel={t('paywall.dismissHint')}
         onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}
         style={({ pressed }) => [styles.dismiss, pressed && styles.pressed]}>
         <ThemedText type="small" themeColor="textMuted" style={styles.dismissText}>
-          ไว้ก่อน — กลับไปหน้าหลัก
+          {t('paywall.dismiss')}
         </ThemedText>
       </Pressable>
 
       <ThemedText type="small" themeColor="textMuted" style={styles.note}>
-        การวิเคราะห์ทั้งหมดเป็นค่าประมาณทางสถิติจากข้อมูลย้อนหลัง ไม่มีโมเดลใดรับประกันผลรางวัลได้
+        {t('paywall.disclaimer')}
       </ThemedText>
     </ModalScaffold>
   );
@@ -171,16 +172,13 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     gap: 2,
   },
-  titleThai: {
+  title: {
     // Thai stacks tone marks above and vowel marks below the baseline, so the
     // default line box clips them; this needs a taller line height than Latin.
+    // English copy inherits the extra height harmlessly.
     fontSize: 20,
     lineHeight: 34,
     fontWeight: '800',
-  },
-  titleEn: {
-    fontSize: 12,
-    letterSpacing: 0.4,
   },
 
   // Features --------------------------------------------------------------

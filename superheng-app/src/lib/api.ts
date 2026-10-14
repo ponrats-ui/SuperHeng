@@ -222,7 +222,27 @@ export type BasicPredictions = {
 // Premium — Bayesian positional insights (`/api/predict/premium`)
 // ---------------------------------------------------------------------------
 
-/** Response key for each of the six modelled positions of the 6-digit first prize. */
+/**
+ * The ledgers the backend holds, one per country.
+ *
+ * Mirrors `LotteryType` in `backend/main.py` and the `lottery_type` CHECK
+ * constraint in `backend/schema.sql`: the three places move together, and a new
+ * country has to be added to all three or the API answers 422.
+ */
+export type LotteryType = 'thai' | 'laos' | 'vietnam';
+
+/** Display order of the country tabs, and the value sent as `?type=`. */
+export const LOTTERY_TYPES: readonly LotteryType[] = ['thai', 'laos', 'vietnam'];
+
+/**
+ * Response key for a modelled position of a first prize.
+ *
+ * Every key a lottery can publish is listed; which ones a response actually
+ * carries depends on how many digits its first prize has. Thailand's รางวัลที่ 1
+ * and Laos's first prize are six digits and use all six; Vietnam's giải đặc biệt
+ * is five, so its response starts at `ten_thousands` and `hundred_thousands` is
+ * simply absent — the prize has no digit there to estimate.
+ */
 export type PositionKey =
   | 'hundred_thousands'
   | 'ten_thousands'
@@ -232,7 +252,8 @@ export type PositionKey =
   | 'units';
 
 /**
- * Display order for the six positions, left to right as the prize is read.
+ * Display order for every position a ledger can have, left to right as the prize
+ * is read. A lottery with a shorter prize publishes a subset, in this order.
  *
  * The backend returns them as an object, and nothing guarantees a browser or
  * Hermes preserves key insertion order, so the UI iterates this list rather than
@@ -299,6 +320,11 @@ export type PositionalEstimate = {
 export type PremiumInsights = {
   status: PredictionStatus;
   model: 'bayesian_positional';
+  /**
+   * The ledger these numbers came from — echoed by the endpoint so a response can
+   * be matched against the tab that asked for it.
+   */
+  lottery_type: LotteryType;
   draws_analyzed: number;
   date_range: { from: string | null; to: string | null };
   latest_draw: { draw_date: string; first_prize: string } | null;
@@ -355,6 +381,19 @@ function asString(value: unknown, fallback = ''): string {
 
 function toStatus(value: unknown): PredictionStatus {
   return value === 'ok' || value === 'limited' ? value : 'insufficient_data';
+}
+
+/**
+ * Narrows the echoed ledger to a known country, defaulting to Thai.
+ *
+ * The default is the same one the backend applies, so a response that predates
+ * this field (or a proxy that dropped it) renders as the Thai analysis rather
+ * than as an unknown country.
+ */
+function toLotteryType(value: unknown): LotteryType {
+  return typeof value === 'string' && (LOTTERY_TYPES as readonly string[]).includes(value)
+    ? (value as LotteryType)
+    : 'thai';
 }
 
 function asBasis(value: unknown): PositionBasis {
@@ -610,6 +649,7 @@ export function parsePremiumInsights(body: unknown): PremiumInsights {
   return {
     status: toStatus(root.status),
     model: 'bayesian_positional',
+    lottery_type: toLotteryType(root.lottery_type),
     draws_analyzed: asNumber(root.draws_analyzed),
     date_range: {
       from: typeof range.from === 'string' ? range.from : null,
@@ -831,10 +871,18 @@ export async function getBasicPredictions(
  */
 export async function getPremiumInsights(
   limit?: number,
-  options?: RequestOptions
+  options?: RequestOptions,
+  /** Which country's ledger to analyse. Omit for the Thai lottery. */
+  lotteryType: LotteryType = 'thai'
 ): Promise<PremiumInsights> {
-  const query = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`;
-  return parsePremiumInsights(await request(`/api/predict/premium${query}`, options));
+  // `type` is always sent, even at its default, so the request that produced a
+  // response is readable from it — including in the backend log, which records the
+  // ledger it analysed.
+  const params = new URLSearchParams({ type: lotteryType });
+  if (limit !== undefined) params.set('limit', String(limit));
+  return parsePremiumInsights(
+    await request(`/api/predict/premium?${params.toString()}`, options)
+  );
 }
 
 // ---------------------------------------------------------------------------

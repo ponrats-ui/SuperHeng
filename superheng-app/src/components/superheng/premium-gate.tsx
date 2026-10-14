@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
+import { useTranslation } from '@/lib/i18n';
 import { isPremiumCredential, readPremiumUnlock, writePremiumUnlock } from '@/lib/premium-access';
 
 export type PremiumGateProps = {
@@ -31,10 +32,16 @@ export type PremiumGateProps = {
  */
 export function PremiumGate({ children }: PremiumGateProps) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
   const [unlocked, setUnlocked] = useState(readPremiumUnlock);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  /**
+   * A flag rather than the message: the wording is translated at render, so
+   * switching language while a failed attempt is on screen re-renders it in the
+   * new language instead of leaving the old one behind.
+   */
+  const [failed, setFailed] = useState(false);
 
   /**
    * Checks the pair and opens the door.
@@ -44,12 +51,12 @@ export function PremiumGate({ children }: PremiumGateProps) {
    */
   function submit() {
     if (!isPremiumCredential(username, password)) {
-      setError('Invalid credentials');
+      setFailed(true);
       return;
     }
     writePremiumUnlock(true);
     setUnlocked(true);
-    setError(null);
+    setFailed(false);
     // Do not keep the password in memory once the door is open.
     setPassword('');
   }
@@ -60,7 +67,7 @@ export function PremiumGate({ children }: PremiumGateProps) {
     setUnlocked(false);
     setUsername('');
     setPassword('');
-    setError(null);
+    setFailed(false);
   }
 
   if (unlocked) {
@@ -69,11 +76,11 @@ export function PremiumGate({ children }: PremiumGateProps) {
         {children}
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="ล็อก Premium insights อีกครั้ง"
+          accessibilityLabel={t('premium.signOut')}
           onPress={lock}
           style={({ pressed }) => [styles.lockAgain, pressed && styles.pressed]}>
           <ThemedText type="small" themeColor="textMuted" style={styles.lockAgainText}>
-            🔒 ล็อกอีกครั้ง (Lock)
+            {t('premium.signOut')}
           </ThemedText>
         </Pressable>
       </View>
@@ -84,29 +91,29 @@ export function PremiumGate({ children }: PremiumGateProps) {
     <View style={[styles.form, { borderColor: `${colors.gold}66` }]}>
       <View style={[styles.pill, { borderColor: `${colors.gold}80` }]}>
         <ThemedText type="small" style={[styles.pillText, { color: colors.accent }]}>
-          🔒 PREMIUM LOGIN
+          {t('premium.loginPill')}
         </ThemedText>
       </View>
 
-      <ThemedText style={styles.title}>Premium Access</ThemedText>
+      <ThemedText style={styles.title}>{t('premium.accessTitle')}</ThemedText>
       <ThemedText type="small" themeColor="textMuted" style={styles.subtitle}>
-        โหมด Premium สำหรับทดสอบเบต้า — เข้าสู่ระบบเพื่อดูการวิเคราะห์รายตำแหน่ง
+        {t('premium.accessSubtitle')}
       </ThemedText>
 
       <View style={styles.field}>
         <ThemedText type="small" themeColor="textMuted" style={styles.label}>
-          Username
+          {t('premium.username')}
         </ThemedText>
         <TextInput
           value={username}
           onChangeText={setUsername}
-          placeholder="username"
+          placeholder={t('premium.username')}
           placeholderTextColor={colors.textMuted}
           autoCapitalize="none"
           autoCorrect={false}
           autoComplete="username"
           returnKeyType="next"
-          accessibilityLabel="Premium username"
+          accessibilityLabel={t('premium.username')}
           style={[
             styles.input,
             {
@@ -120,7 +127,7 @@ export function PremiumGate({ children }: PremiumGateProps) {
 
       <View style={styles.field}>
         <ThemedText type="small" themeColor="textMuted" style={styles.label}>
-          Password
+          {t('premium.password')}
         </ThemedText>
         <TextInput
           value={password}
@@ -133,7 +140,7 @@ export function PremiumGate({ children }: PremiumGateProps) {
           autoComplete="current-password"
           returnKeyType="go"
           onSubmitEditing={submit}
-          accessibilityLabel="Premium password"
+          accessibilityLabel={t('premium.password')}
           style={[
             styles.input,
             {
@@ -145,18 +152,18 @@ export function PremiumGate({ children }: PremiumGateProps) {
         />
       </View>
 
-      {error ? (
+      {failed ? (
         <ThemedText
           type="small"
           accessibilityLiveRegion="polite"
           style={[styles.error, { color: colors.danger }]}>
-          {error}
+          {t('premium.wrongCredentials')}
         </ThemedText>
       ) : null}
 
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="เข้าสู่ระบบ Premium mode"
+        accessibilityLabel={t('premium.signIn')}
         onPress={submit}
         style={({ pressed }) => [
           styles.submit,
@@ -164,13 +171,12 @@ export function PremiumGate({ children }: PremiumGateProps) {
           pressed && styles.pressed,
         ]}>
         <ThemedText type="smallBold" style={[styles.submitText, { color: colors.onPrimary }]}>
-          เข้าสู่ระบบ (Unlock)
+          {t('premium.signIn')}
         </ThemedText>
       </Pressable>
 
       <ThemedText type="small" themeColor="textMuted" style={styles.note}>
-        เป็นเพียงประตูหน้าแบบเบต้า: เว็บนี้เป็น static build และข้อมูลชุดเดียวกับที่ API
-        สาธารณะ — ไม่ใช่การป้องกันระดับ production
+        {t('premium.gateNote')}
       </ThemedText>
     </View>
   );

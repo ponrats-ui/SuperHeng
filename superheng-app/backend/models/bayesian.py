@@ -1,4 +1,4 @@
-"""SuperHeng — Premium: Bayesian positional model for the 6-digit first prize.
+"""SuperHeng — Premium: Bayesian positional model for a first prize's digits.
 
 What this models, and why
 -------------------------
@@ -27,6 +27,17 @@ The leading digit is the one position with **no higher neighbour**, so it is
 published on its marginal alone (``basis == "marginal"``, ``conditioned_on ==
 null``). A six-digit first prize may begin with 0, so all ten digits are possible
 there and nothing is truncated.
+
+One model, three ledgers
+------------------------
+Thailand's รางวัลที่ 1 and Laos's ຫວຍພັດທະນາ first prize are six digits and use the
+reading above unchanged. Vietnam's giải đặc biệt is **five**, so it is modelled as
+five: the five-digit prize is matched against the rightmost five entries of that
+same table and re-indexed, which makes its ten-thousands digit the leading one.
+That is a slice of a magnitude table, not a truncation of the data — ``53618``
+simply has no hundred-thousands digit to estimate, and the model publishes one
+fewer position instead of padding a zero in and reporting it as a 100% posterior.
+See :func:`positions_for_length`, which is the only place that mapping lives.
 
 The Bayesian part
 -----------------
@@ -114,6 +125,18 @@ DEFAULT_PSEUDOCOUNT = 1.0
 # Fewer historical draws than this after a given higher-digit state, and the
 # conditional distribution for that state is reported but not trusted.
 DEFAULT_MIN_SUPPORT = MIN_MARKOV_SUPPORT
+
+# How many digits a stored first prize may have, and which one an unparameterised
+# call means.
+#
+# Six is the Thai รางวัลที่ 1 and the Lao ຫວຍພັດທະນາ first prize. Five is Vietnam's
+# giải đặc biệt — the Hanoi special prize is a five-digit number and is stored as
+# one. Nothing is left-padded to make a foreign ledger look six digits long: a
+# padding zero would be published as a position with a 100% posterior, which is
+# the one thing this feature must never do, because it would read as a signal.
+# Instead a five-digit ledger simply has one fewer position to model.
+DEFAULT_PRIZE_LENGTH = 6
+PRIZE_LENGTHS: tuple[int, ...] = (5, 6)
 
 METHODOLOGY_NOTE = (
     "Per-position Bayesian posteriors over the six digits of รางวัลที่ 1. The "
@@ -210,20 +233,119 @@ POSITIONS: tuple[PositionSpec, ...] = (
 POSITION_NAMES: tuple[str, ...] = tuple(spec.name for spec in POSITIONS)
 
 
+def positions_for_length(
+    length: int = DEFAULT_PRIZE_LENGTH,
+) -> tuple[PositionSpec, ...]:
+    """The modelled positions of a first prize that is ``length`` digits long.
+
+    ``POSITIONS`` is the canonical **six**-digit reading, keyed by magnitude: every
+    entry names the position it *is*, not the index it happens to sit at. A shorter
+    prize is that same reading with its leftmost positions absent, so the canonical
+    six are sliced from the right and re-indexed onto the stored string.
+
+    For a five-digit prize that means ``ten_thousands`` becomes index 0 and the
+    **leading** position, with no higher neighbour to condition on — exactly the
+    role ``hundred_thousands`` plays for six digits. The digit magnitudes still
+    line up: ``53618`` really is 5 ten-thousands, 3 thousands, 6 hundreds, 1 ten
+    and 8 units. Slicing and re-indexing is therefore the whole transformation; no
+    position is renamed, and no magnitude is mislabelled.
+    """
+    if length not in PRIZE_LENGTHS:
+        raise ValueError(
+            f"unsupported prize length {length!r}; expected one of {PRIZE_LENGTHS}"
+        )
+
+    tail = POSITIONS[len(POSITIONS) - length :]
+    specs: list[PositionSpec] = []
+    for index, spec in enumerate(tail):
+        higher = specs[index - 1] if index else None
+        specs.append(
+            PositionSpec(
+                name=spec.name,
+                label=spec.label,
+                plain=spec.plain,
+                index=index,
+                higher_name=higher.name if higher is not None else None,
+                higher_plain=higher.plain if higher is not None else None,
+                higher_index=index - 1 if higher is not None else None,
+            )
+        )
+    return tuple(specs)
+
+
+def methodology_note(length: int = DEFAULT_PRIZE_LENGTH) -> str:
+    """The published methodology, worded for a ledger of ``length`` digits."""
+    if length == DEFAULT_PRIZE_LENGTH:
+        # Byte-for-byte the note this endpoint has always published, so nothing
+        # about the Thai answer moves.
+        return METHODOLOGY_NOTE
+
+    names = ", ".join(spec.plain for spec in positions_for_length(length))
+    # Spelled out, because "over the six digits" is how this note has always read
+    # and the two lengths should not differ in register.
+    count = {5: "five", 6: "six"}.get(length, str(length))
+    return (
+        f"Per-position Bayesian posteriors over the {count} digits of the first "
+        f"prize ({names}). The marginal is a Dirichlet-posterior mean under a "
+        "uniform prior; the premium conditional shrinks each (higher digit -> "
+        "digit) row toward that marginal. The leading digit has no higher position "
+        "to condition on, so it is published on its marginal alone. These are "
+        "model probabilities about historical behaviour, not a chance of winning: "
+        "a fair draw is independent, and any positional lift observed here may be "
+        "entirely sampling noise."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Data preparation
 # ---------------------------------------------------------------------------
 
 
+def _resolve_prize_length(
+    cleaned: pd.Series,
+) -> int:
+    """Which prize length this ledger is written in.
+
+    Inferred from the data rather than assumed, because assuming six would empty a
+    Hanoi ledger (whose first prize is five digits) and report it as "insufficient
+    data" while the rows sat in the table unused. The **most common** valid length
+    wins, so a handful of strays cannot flip the ledger; rows of the other length
+    are then dropped by the caller and reported in ``warnings``.
+
+    A tie resolves to :data:`DEFAULT_PRIZE_LENGTH`. Ties only happen on a ledger
+    too short to have a majority — two rows of one draw each, say — where there is
+    no evidence to prefer five, so the reading every other ledger in the table uses
+    is the one that wins. Endpoints do not rely on this: they pass the length their
+    lottery is known to use.
+    """
+    lengths = cleaned.str.fullmatch(r"[0-9]+").fillna(False).astype(bool)
+    observed = cleaned[lengths].str.len()
+    observed = observed[observed.isin(PRIZE_LENGTHS)]
+    if observed.empty:
+        return DEFAULT_PRIZE_LENGTH
+
+    counts = observed.value_counts()
+    top = int(counts.max())
+    winners = sorted(int(value) for value, count in counts.items() if count == top)
+    return DEFAULT_PRIZE_LENGTH if DEFAULT_PRIZE_LENGTH in winners else winners[-1]
+
+
 def _prepare_prizes(
     rows: Iterable[Mapping[str, Any]],
+    *,
+    length: int | None = None,
 ) -> tuple[list[tuple[str, str]], list[str]]:
     """Turn raw ``lottery_draws`` rows into a chronological list of first prizes.
 
     Returns ``(prizes, warnings)`` where each entry is ``(draw_date_iso, prize)``,
     sorted **oldest first** so "the latest draw" is simply the last entry. Unlike
     the 2-digit preparation, only ``first_prize`` is needed here, so a row that is
-    valid as a 6-digit first prize is kept even if ``bottom_two`` is absent.
+    valid as a first prize is kept even if ``bottom_two`` is absent.
+
+    ``length`` is the number of digits this ledger's prizes have — 6 for Thailand
+    and Laos, 5 for Vietnam's giải đặc biệt. Leave it out and it is inferred from
+    the rows (see :func:`_resolve_prize_length`); pass it to make a mixed ledger an
+    explicit error instead of a silent majority vote.
 
     Rows are never silently dropped: anything discarded is counted and reported.
     """
@@ -244,11 +366,20 @@ def _prepare_prizes(
         frame = frame[frame["draw_date"].notna()]
 
     cleaned = frame["first_prize"].astype("string").str.strip()
-    valid = cleaned.str.fullmatch(r"[0-9]{6}").fillna(False).astype(bool)
+    if length is None:
+        length = _resolve_prize_length(cleaned)
+    elif length not in PRIZE_LENGTHS:
+        raise ValueError(
+            f"unsupported prize length {length!r}; expected one of {PRIZE_LENGTHS}"
+        )
+
+    valid = (cleaned.str.len() == length) & cleaned.str.fullmatch(
+        r"[0-9]+"
+    ).fillna(False).astype(bool)
     invalid = int((~valid).sum())
     if invalid:
         warnings.append(
-            f"Dropped {invalid} row(s) whose first_prize was not exactly 6 digits."
+            f"Dropped {invalid} row(s) whose first_prize was not exactly {length} digits."
         )
     frame = frame[valid]
 
@@ -295,21 +426,28 @@ class DigitEstimate:
 
 
 class BayesianPositionalModel:
-    """Positional Dirichlet posteriors over the 6-digit first prize.
+    """Positional Dirichlet posteriors over a first prize's digits.
 
     The model is pure over its inputs — it is handed the draw rows and owns no
     database access — so it can be unit-tested without a Supabase client, exactly
     like the ARIMA and Monte Carlo models beside it. The endpoint fetches the rows
     through the shared client and passes them in.
 
-    ``prizes`` is an iterable of 6-digit strings in **chronological order** (oldest
-    first); the last entry is treated as the most recent draw.
+    ``prizes`` is an iterable of digit strings in **chronological order** (oldest
+    first); the last entry is treated as the most recent draw. They may be five or
+    six digits long — see ``length``.
+
+    ``length`` is the number of modelled positions. Leave it out and it is taken
+    from the prizes themselves (falling back to :data:`DEFAULT_PRIZE_LENGTH` for an
+    empty ledger). Pass it explicitly only when the prizes are empty or when the
+    caller wants a mismatch to raise rather than be inferred.
     """
 
     def __init__(
         self,
         prizes: Iterable[str],
         *,
+        length: int | None = None,
         prior_alpha: float = DEFAULT_PRIOR_ALPHA,
         pseudocount: float = DEFAULT_PSEUDOCOUNT,
         min_support: int = DEFAULT_MIN_SUPPORT,
@@ -326,6 +464,10 @@ class BayesianPositionalModel:
 
         self.prizes: list[str] = [str(prize).strip() for prize in prizes]
         self.draws: int = len(self.prizes)
+        self.length: int = self._resolve_length(length)
+        # The positions of *this* ledger. Six for Thailand and Laos, five for
+        # Vietnam — never a padded six, so no position is a structural zero.
+        self.positions: tuple[PositionSpec, ...] = positions_for_length(self.length)
         self.prior_alpha = float(prior_alpha)
         self.pseudocount = float(pseudocount)
         self.min_support = int(min_support)
@@ -339,10 +481,34 @@ class BayesianPositionalModel:
         self.conditional_posterior: dict[str, dict[str, dict[str, float]]] = {}
         self._fit()
 
+    def _resolve_length(self, length: int | None) -> int:
+        """Settle the number of positions, and refuse a prize that does not fit."""
+        if length is None:
+            lengths = {len(prize) for prize in self.prizes}
+            if not lengths:
+                return DEFAULT_PRIZE_LENGTH
+            if len(lengths) > 1:
+                raise ValueError(
+                    "prizes of differing lengths were supplied "
+                    f"({sorted(lengths)}); a ledger models one prize length"
+                )
+            length = lengths.pop()
+        if length not in PRIZE_LENGTHS:
+            raise ValueError(
+                f"unsupported prize length {length!r}; expected one of {PRIZE_LENGTHS}"
+            )
+        for prize in self.prizes:
+            if len(prize) != length:
+                raise ValueError(
+                    f"prize {prize!r} is not {length} digits, which is the length "
+                    "this ledger is modelled at"
+                )
+        return length
+
     # -- fitting ----------------------------------------------------------
     def _fit(self) -> None:
         """Count observations and compute both closed-form posteriors."""
-        for spec in POSITIONS:
+        for spec in self.positions:
             self.marginal_counts[spec.name] = {digit: 0 for digit in DIGITS}
             self.row_counts[spec.name] = {digit: 0 for digit in DIGITS}
             self.joint_counts[spec.name] = {
@@ -350,7 +516,7 @@ class BayesianPositionalModel:
             }
 
         for prize in self.prizes:
-            for spec in POSITIONS:
+            for spec in self.positions:
                 digit = prize[spec.index]
                 self.marginal_counts[spec.name][digit] += 1
                 higher_index = spec.higher_index
@@ -362,7 +528,7 @@ class BayesianPositionalModel:
                 self.row_counts[spec.name][higher] += 1
                 self.joint_counts[spec.name][higher][digit] += 1
 
-        for spec in POSITIONS:
+        for spec in self.positions:
             # Marginal posterior — uniform Dirichlet prior over the ten digits.
             denominator = self.draws + UNIVERSE_SIZE * self.prior_alpha
             if denominator <= 0:
@@ -502,7 +668,7 @@ class BayesianPositionalModel:
         """
         results: dict[str, Any] = {}
 
-        for spec in POSITIONS:
+        for spec in self.positions:
             higher_index = spec.higher_index
             state = (
                 self.latest[higher_index]
@@ -580,6 +746,7 @@ class BayesianPositionalModel:
 def analyse_positions(
     rows: Iterable[Mapping[str, Any]],
     *,
+    length: int | None = None,
     prior_alpha: float = DEFAULT_PRIOR_ALPHA,
     pseudocount: float = DEFAULT_PSEUDOCOUNT,
     min_support: int = DEFAULT_MIN_SUPPORT,
@@ -592,11 +759,19 @@ def analyse_positions(
     every limitation listed in ``warnings``, so the client can render an empty
     state rather than an error page.
     """
-    prizes, warnings = _prepare_prizes(rows)
+    prizes, warnings = _prepare_prizes(rows, length=length)
     draws = len(prizes)
+    # The ledger's prize length drives everything below it: which positions exist,
+    # how many there are, and the wording of the methodology. It is carried into
+    # the payload as `prize_digits` so a client can tell a five-position answer
+    # from a six-position one without inferring it from a dict's size.
+    digits = length if length is not None else (
+        len(prizes[0][1]) if prizes else DEFAULT_PRIZE_LENGTH
+    )
 
     model = BayesianPositionalModel(
         [prize for _, prize in prizes],
+        length=digits,
         prior_alpha=prior_alpha,
         pseudocount=pseudocount,
         min_support=min_support,
@@ -615,7 +790,8 @@ def analyse_positions(
         status = "insufficient_data"
         warnings.append(
             "No usable draws, so no positional prediction was produced. Seed the "
-            "lottery_draws table with backend/scraper.py."
+            "lottery_draws table with backend/scraper.py (Thai) or "
+            "backend/scripts/scrape_international.py (Lao and Vietnamese)."
         )
     elif draws < MIN_DRAWS_ANY:
         status = "insufficient_data"
@@ -650,6 +826,7 @@ def analyse_positions(
         "status": status,
         "model": "bayesian_positional",
         "draws_analyzed": draws,
+        "prize_digits": digits,
         "date_range": {
             "from": prizes[0][0] if prizes else None,
             "to": prizes[-1][0] if prizes else None,
@@ -661,5 +838,5 @@ def analyse_positions(
         "top_n": top_n,
         "positions": positions,
         "warnings": warnings,
-        "methodology": METHODOLOGY_NOTE,
+        "methodology": methodology_note(digits),
     }

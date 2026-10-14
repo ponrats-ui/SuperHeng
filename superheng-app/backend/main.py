@@ -45,6 +45,7 @@ import logging
 import os
 import re
 from contextlib import asynccontextmanager
+from enum import Enum
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -77,6 +78,44 @@ API_VERSION = "1.0"
 DRAWS_TABLE = "lottery_draws"
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 100
+
+
+class LotteryType(str, Enum):
+    """The ledgers ``lottery_draws`` holds, one per country.
+
+    A ``str`` enum so the value is what reaches PostgreSQL and the query string;
+    inheriting from ``str`` also keeps it JSON-serialisable without a custom
+    encoder. Declaring it as the type of a query parameter (rather than validating
+    a free string) is what makes FastAPI reject an unplanned country with a 422 and
+    list the valid values in the OpenAPI schema — the ledger only ever holds the
+    three values `schema.sql`'s CHECK constraint allows.
+    """
+
+    thai = "thai"  # Government Lottery Office (GLO) — the original ledger
+    laos = "laos"
+    vietnam = "vietnam"  # Hanoi
+
+
+# How many digits each ledger's first prize has, which is what the premium model
+# models. This is a property of the *lottery*, not a setting: Thailand's รางวัลที่ 1
+# and Laos's ຫວຍພັດທະນາ first prize are six-digit numbers, and Vietnam's giải đặc
+# biệt (the Hanoi special prize) is a five-digit one. The value is passed to the
+# model rather than guessed, so a row of the wrong length is reported as a warning
+# instead of silently redefining how many positions the country has.
+LOTTERY_PRIZE_DIGITS: dict[LotteryType, int] = {
+    LotteryType.thai: 6,
+    LotteryType.laos: 6,
+    LotteryType.vietnam: 5,
+}
+
+# One description for the parameter wherever it appears.
+LOTTERY_TYPE_DESCRIPTION = (
+    "Which country's ledger to analyse: 'thai' (default, the GLO draws), 'laos', "
+    "or 'vietnam' (Hanoi). An unseeded ledger is not an error — it answers HTTP "
+    "200 with status 'insufficient_data'."
+)
+
+LOTTERY_TYPE_QUERY = Query(LotteryType.thai, description=LOTTERY_TYPE_DESCRIPTION)
 
 # Rolling window for the prediction models: how many of the most recent draws they
 # are allowed to see. Fixed rather than "everything we have" because the archive is
@@ -385,12 +424,27 @@ async def health() -> dict[str, Any]:
                 "advanced": "/api/predict/advanced",
                 "premium": "/api/predict/premium",
             },
+            # Advertised so a client can find out which ledgers exist without
+            # guessing, and so the list lives in exactly one place (`LotteryType`).
+            "lottery_types": [kind.value for kind in LotteryType],
         },
     }
 
 
-def fetch_draw_history(client: Client, limit: int) -> list[dict[str, Any]]:
+def fetch_draw_history(
+    client: Client,
+    limit: int,
+    lottery_type: LotteryType | str = LotteryType.thai,
+) -> list[dict[str, Any]]:
     """Fetch at most ``limit`` draws — and never more than the rolling window.
+
+    ``lottery_type`` selects which country's ledger to read. It is filtered in the
+    query (a PostgREST ``eq``), not after the fact: filtering in Python would mean
+    downloading a window of every country's draws and then discarding most of it,
+    and — worse — it would make the ``limit`` mean "the newest N rows of the mixed
+    ledger", so a Thai request could come back with a window that is half Lao.
+    The default keeps the basic and advanced endpoints Thai, which is what the
+    dashboard shows.
 
     ``limit`` is clamped to :data:`ROLLING_WINDOW_DRAWS` here rather than only at the
     endpoint, so the window is a property of the data feeding the models: an
@@ -408,9 +462,11 @@ def fetch_draw_history(client: Client, limit: int) -> list[dict[str, Any]]:
     "the next draw" stays unambiguous for the Markov step.
     """
     window = min(limit, ROLLING_WINDOW_DRAWS)
+    kind = LotteryType(lottery_type).value
     response = (
         client.table(DRAWS_TABLE)
         .select(HISTORY_COLUMNS)
+        .eq("lottery_type", kind)
         .order("draw_date", desc=True)
         .limit(window)
         .execute()
@@ -431,11 +487,19 @@ async def latest_draws(
         le=MAX_LIMIT,
         description=f"How many draws to return (1-{MAX_LIMIT}, default {DEFAULT_LIMIT}).",
     ),
+    type: LotteryType = LOTTERY_TYPE_QUERY,
 ) -> list[dict[str, Any]]:
     """Return the most recent rows from ``lottery_draws``, newest first.
 
-    Ordered by ``draw_date`` descending, which is also the table's unique key,
-    so the ordering is total and stable — there is no tie to break.
+    Filtered by ``type`` (``thai`` by default) as of the multi-country ledger. The
+    filter is not cosmetic: the table's unique key is now
+    ``(lottery_type, draw_date)``, so ordering the *whole* table by ``draw_date``
+    would interleave countries and the dashboard's "latest draw" could be a Lao
+    draw shown under a Thai heading.
+
+    Ordered by ``draw_date`` descending *within* the chosen ledger, where
+    ``draw_date`` is unique — so the ordering is total and stable and there is no
+    tie to break.
 
     Errors are split deliberately:
 
@@ -455,6 +519,7 @@ async def latest_draws(
         response = (
             client.table(DRAWS_TABLE)
             .select("*")
+            .eq("lottery_type", type.value)
             .order("draw_date", desc=True)
             .limit(limit)
             .execute()
@@ -644,22 +709,35 @@ async def predict_advanced(
 @app.get(
     "/api/predict/premium",
     tags=["predict"],
-    summary="Bayesian positional posteriors for all six digits of รางวัลที่ 1",
+    summary="Bayesian positional posteriors for every digit of a first prize",
     response_description=(
-        "Top 3 digits per position (hundred_thousands to units), each with a "
-        "posterior probability (0.0-1.0) and a math-derived reason"
+        "Top 3 digits per position (hundred_thousands to units for a six-digit "
+        "first prize; ten_thousands to units for Vietnam's five-digit one), each "
+        "with a posterior probability (0.0-1.0) and a math-derived reason"
     ),
 )
 async def predict_premium(
     limit: int = HISTORY_LIMIT_QUERY,
+    type: LotteryType = LOTTERY_TYPE_QUERY,
 ) -> dict[str, Any]:
-    """Premium tier: a per-position Bayesian model of the 6-digit first prize.
+    """Premium tier: a per-position Bayesian model of a first prize.
 
-    For each of the six modelled positions — ``hundred_thousands``,
-    ``ten_thousands``, ``thousands``, ``hundreds``, ``tens`` and ``units`` (the
-    whole first prize, read left to right) — this returns the **top 3** digits with
-    their posterior probability (0.0-1.0) and a reason assembled from the computed
-    counts.
+    ``type`` chooses the ledger (``thai`` by default, or ``laos`` / ``vietnam``),
+    and everything below the fetch is unchanged: the same marginal-vs-conditional
+    model, the same layout. The country is a property of the *data*, not of the
+    maths — which is why this is a filter on the query and not a second model.
+
+    The number of positions follows the ledger's prize: **six** for Thailand's
+    รางวัลที่ 1 and Laos's first prize, **five** for Vietnam's giải đặc biệt, which
+    is a five-digit number. ``prize_digits`` in the response states which, and the
+    positions present are exactly the digits the prize has — a five-digit prize is
+    never padded to six, because a padding zero would publish a 100% posterior at
+    a position that does not exist.
+
+    For each modelled position — ``hundred_thousands`` through ``units`` for a
+    six-digit prize, ``ten_thousands`` through ``units`` for a five-digit one (read
+    left to right) — this returns the **top 3** digits with their posterior
+    probability (0.0-1.0) and a reason assembled from the computed counts.
 
     Two probabilities drive each pick, and the difference between them is the
     Premium feature:
@@ -671,9 +749,10 @@ async def predict_premium(
       A position ranks on the conditional when that state has enough support, and
       falls back to the marginal (saying so) when it does not.
 
-    The leading digit (``hundred_thousands``) has no higher neighbour, so it is the
-    one position that always ranks on its marginal: it reports ``conditioned_on``
-    as ``null`` and ``basis`` as ``"marginal"``, and is not marked unusable for it.
+    The leading digit — ``hundred_thousands``, or ``ten_thousands`` when the prize
+    is five digits — has no higher neighbour, so it is the one position that always
+    ranks on its marginal: it reports ``conditioned_on`` as ``null`` and ``basis``
+    as ``"marginal"``, and is not marked unusable for it.
 
     The response also carries ``distribution`` — the full posterior it ranked on,
     all ten digits — so the client can draw the whole bar rather than only the top
@@ -692,18 +771,21 @@ async def predict_premium(
     from models.bayesian import analyse_positions
 
     client = get_supabase()
+    lottery_type = type.value
 
     try:
-        rows = fetch_draw_history(client, limit)
+        rows = fetch_draw_history(client, limit, type)
     except Exception as exc:  # noqa: BLE001 - translated into an HTTP response
-        log.exception("Draw history query failed (premium).")
+        log.exception("Draw history query failed (premium, type=%s).", lottery_type)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch draw history from '{DRAWS_TABLE}': {exc}",
+            detail=(
+                f"Failed to fetch {lottery_type} draw history from '{DRAWS_TABLE}': {exc}"
+            ),
         ) from exc
 
     try:
-        result = analyse_positions(rows)
+        result = analyse_positions(rows, length=LOTTERY_PRIZE_DIGITS[type])
     except Exception as exc:  # noqa: BLE001 - a model bug must not look like bad input
         log.exception("Premium prediction failed after fetching %d row(s).", len(rows))
         raise HTTPException(
@@ -711,9 +793,16 @@ async def predict_premium(
             detail=f"Failed to compute premium predictions: {exc}",
         ) from exc
 
+    # Echo which ledger produced these numbers. The panel refetches whenever the
+    # country changes, so a response that arrives after the user has moved on can
+    # be discarded by comparing this field against the selected tab instead of
+    # rendering one country's posterior under another country's heading.
+    result["lottery_type"] = lottery_type
+
     log.info(
-        "predict/premium: status=%s draws=%d (limit=%d)",
+        "predict/premium: status=%s type=%s draws=%d (limit=%d)",
         result.get("status"),
+        lottery_type,
         result.get("draws_analyzed", 0),
         limit,
     )

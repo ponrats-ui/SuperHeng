@@ -106,7 +106,23 @@ log = logging.getLogger("superheng.scraper")
 # ---------------------------------------------------------------------------
 
 TABLE_NAME = "lottery_draws"
-CONFLICT_TARGET = "draw_date"
+
+# The upsert conflict target, and it must match the unique key in schema.sql
+# (`lottery_draws_type_date_key`) or PostgREST fails with 42P10.
+#
+# The pair, rather than `draw_date` alone, because the table now holds one ledger
+# per country: Laos and Vietnam draw on the same calendar dates as Thailand, so a
+# date-only target would let one country's row overwrite another's. It stays a
+# real conflict target for this script even though every row it writes is Thai —
+# the engine below never names `lottery_type` at all, relying on the column's
+# `default 'thai'`, which is also why `ScrapedDraw.as_row()` still emits exactly
+# the three prize columns.
+CONFLICT_TARGET = "lottery_type,draw_date"
+
+# The lottery this engine ingests. Single-valued on purpose: there is no Lao or
+# Vietnamese scraper yet, and a silent `--type` flag now would invite writing
+# unvalidated foreign rows into an immutable ledger.
+LOTTERY_TYPE = "thai"
 
 SANOOK_BASE = "https://news.sanook.com"
 SANOOK_CHECK_PATH = "/lotto/check/{ddmmyyyy}/"
@@ -315,8 +331,8 @@ def clean_number(raw: Any, length: int) -> str | None:
     """Return `raw` as exactly `length` ASCII digits, or None if it is not that.
 
     Cleaning is deliberately narrow, because the table's CHECK constraints accept
-    only ``^[0-9]{6}$`` / ``^[0-9]{2}$`` and a value that fails here would be
-    rejected by PostgreSQL anyway:
+    only ``^[0-9]{5,6}$`` for a first prize and ``^[0-9]{2}$`` for the bottom two,
+    and a value that fails here would be rejected by PostgreSQL anyway:
 
     * Thai numerals are transliterated to ASCII (๐๑๒๓๔๕๖๗๘๙ -> 0123456789).
     * Thousands separators and all whitespace forms (including NBSP and
@@ -1571,7 +1587,13 @@ def upsert_rows(
     *,
     batch_size: int = BATCH_SIZE,
 ) -> int:
-    """Upsert rows into ``lottery_draws``, keyed on ``draw_date``."""
+    """Upsert rows into ``lottery_draws``, keyed on the ``CONFLICT_TARGET`` pair.
+
+    The target is ``(lottery_type, draw_date)``: the same date appears once per
+    country, so a date-only target would overwrite another ledger's row. Callers
+    that write more than one country in a batch must de-duplicate on that pair
+    first — see ``scripts/scrape_international.dedupe_rows``.
+    """
     if not rows:
         log.warning("Nothing to upsert.")
         return 0
@@ -1596,7 +1618,7 @@ def upsert_rows(
                 ) from exc
             if "42P10" in message or "no unique or exclusion constraint" in message:
                 raise IngestionError(
-                    "draw_date has no UNIQUE constraint, so ON CONFLICT cannot "
+                    f"{CONFLICT_TARGET} has no UNIQUE index, so ON CONFLICT cannot "
                     "target it. Run schema.sql against the project."
                 ) from exc
             raise IngestionError(f"Supabase upsert failed: {message}") from exc

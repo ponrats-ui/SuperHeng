@@ -2,27 +2,70 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import { ProbabilityBar } from '@/components/superheng/probability-bar';
+import { SegmentedControl } from '@/components/superheng/segmented-control';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
 import {
+  LOTTERY_TYPES,
   POSITION_KEYS,
   getPremiumInsights,
   isApiError,
+  type LotteryType,
   type PositionalDigit,
   type PositionalEstimate,
+  type PositionKey,
   type PremiumInsights,
   type PredictionStatus,
 } from '@/lib/api';
-import { formatCount, formatDate, formatPercent } from '@/lib/format';
-
-/** Turns the backend's snake_case position key into something readable. */
-function prettyPosition(name: string): string {
-  return name.replace(/_/g, '-');
-}
+import { formatCount, formatLocalizedDate, formatPercent } from '@/lib/format';
+import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
 /**
- * Premium positional insights — all six digits of รางวัลที่ 1.
+ * Localised name for each modelled position.
+ *
+ * The panel deliberately **ignores** the API's own `label` field, which is a
+ * bilingual concatenation like "Thousands (หลักพัน)" — the exact mixed-language
+ * string this rewrite exists to remove.
+ */
+const POSITION_LABEL_KEYS: Record<PositionKey, TranslationKey> = {
+  hundred_thousands: 'premium.positionHundredThousands',
+  ten_thousands: 'premium.positionTenThousands',
+  thousands: 'premium.positionThousands',
+  hundreds: 'premium.positionHundreds',
+  tens: 'premium.positionTens',
+  units: 'premium.positionUnits',
+};
+
+/**
+ * The endpoint's `status` values as dictionary keys.
+ *
+ * Mapped rather than interpolated so the raw enum never reaches the screen: the
+ * Thai UI used to print `Model status: limited` in English.
+ */
+const STATUS_KEYS: Record<string, TranslationKey> = {
+  ok: 'status.ok',
+  limited: 'status.limited',
+  insufficient_data: 'status.insufficientData',
+};
+
+/**
+ * Tab label per ledger.
+ *
+ * Country names rather than the ISO-ish codes the API uses, and translated: a
+ * reader in Thai mode should not have to read "Laos" in Latin script to find the
+ * Lao lottery. The header's TH/EN switch is a *language* control, so the tab row
+ * deliberately does not reuse its two-letter faces — the same "TH" meaning two
+ * different things eight pixels apart is a usability trap.
+ */
+const LOTTERY_LABEL_KEYS: Record<LotteryType, TranslationKey> = {
+  thai: 'premium.lotteryThai',
+  laos: 'premium.lotteryLaos',
+  vietnam: 'premium.lotteryVietnam',
+};
+
+/**
+ * Premium positional insights — every digit of the selected lottery's first prize.
  *
  * Self-contained: it owns its request, loading, error and empty states, so the
  * dashboard only has to drop it into a card. There **is** a door in front of it —
@@ -34,12 +77,27 @@ function prettyPosition(name: string): string {
  * a genuine failure (`ApiError`), an empty/thin ledger (`insufficient_data` /
  * `limited`), and a populated ranking. An empty ledger is a success, so it gets
  * an empty state rather than the error card.
+ *
+ * The country tabs at the top swap the *data source*, not the layout: every state
+ * below them is the same markup for Thai, Lao and Vietnamese history, because the
+ * marginal-vs-conditional maths does not depend on which lottery the draws came
+ * from. A country with no ingested history therefore shows the ordinary empty
+ * state rather than a special case.
+ *
+ * One thing does differ, and it is honest rather than cosmetic: Vietnam's special
+ * prize is five digits, so its response carries five positions and the panel draws
+ * five. `positions` is keyed by name and parsed as a partial record, so an absent
+ * position is a row that is not rendered — never a zero padded in to make the
+ * country look like Thailand.
  */
 export function PremiumInsightsPanel() {
   const { colors } = useAppTheme();
+  const { t, language } = useTranslation();
   const [insights, setInsights] = useState<PremiumInsights | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /** The selected ledger. Thai is the default because it is the seeded one. */
+  const [lotteryType, setLotteryType] = useState<LotteryType>('thai');
   /**
    * True once the transport has started retrying, i.e. the first attempt did not
    * answer and the instance is probably booting. See the dashboard's LoadingCard
@@ -58,14 +116,30 @@ export function PremiumInsightsPanel() {
   useEffect(() => {
     let cancelled = false;
 
-    void getPremiumInsights(undefined, {
-      onRetry: () => {
-        if (cancelled) return;
-        setWaking(true);
+    void getPremiumInsights(
+      undefined,
+      {
+        onRetry: () => {
+          if (cancelled) return;
+          setWaking(true);
+        },
       },
-    }).then(
+      lotteryType
+    ).then(
       (result) => {
         if (cancelled) return;
+        // Guard the tab against a server that answered with the wrong ledger. The
+        // endpoint echoes the type it analysed, so a response belonging to another
+        // country is refused rather than rendered: showing Thai numbers under the
+        // Laos tab is precisely the failure the tabs exist to prevent. This cannot
+        // normally fire — the effect refetches on every change — which is why it is
+        // worth keeping as a check instead of a comment.
+        if (result.lottery_type !== lotteryType) {
+          setInsights(null);
+          setError(t('premium.lotteryMismatch'));
+          setLoading(false);
+          return;
+        }
         setInsights(result);
         setError(null);
         setLoading(false);
@@ -85,7 +159,7 @@ export function PremiumInsightsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, lotteryType, t]);
 
   function retry() {
     setLoading(true);
@@ -93,44 +167,88 @@ export function PremiumInsightsPanel() {
     setReloadKey((key) => key + 1);
   }
 
+  /**
+   * Switches country: clears the previous ledger's numbers and fetches the new one.
+   *
+   * Clearing is the point. The request takes as long as a cold server takes, and
+   * leaving the old positions on screen under the new tab would attribute one
+   * country's posterior to another. Nothing is cached between tabs because a
+   * country's analysis is cheap to recompute and a stale one is worse than a
+   * spinner.
+   */
+  function selectType(next: LotteryType) {
+    if (next === lotteryType) return;
+    setInsights(null);
+    setError(null);
+    setWaking(false);
+    setLoading(true);
+    setLotteryType(next);
+  }
+
+  /**
+   * The country switcher, rendered above every state.
+   *
+   * Above *every* state, including the error one: a fetch failure must not strand
+   * the reader on the tab that failed, or a country whose ledger is empty would be
+   * a one-way door.
+   */
+  const tabs = (
+    <View accessibilityRole="tablist" accessibilityLabel={t('premium.lotteryFilter')}>
+      <SegmentedControl
+        options={LOTTERY_TYPES.map((kind) => ({
+          key: kind,
+          label: t(LOTTERY_LABEL_KEYS[kind]),
+        }))}
+        value={lotteryType}
+        onChange={selectType}
+      />
+    </View>
+  );
+
   if (loading) {
     return (
-      <View style={styles.stateBody}>
-        <ActivityIndicator color={colors.primary} />
-        <ThemedText type="small" themeColor="textSecondary" style={styles.stateText}>
-          {waking
-            ? 'กำลังปลุกเซิร์ฟเวอร์… (เซิร์ฟเวอร์สลีปอยู่ อาจใช้เวลาถึง 1 นาที)'
-            : 'กำลังโหลดการวิเคราะห์รายตำแหน่ง…'}
-        </ThemedText>
+      <View style={styles.container}>
+        {tabs}
+        <View style={styles.stateBody}>
+          <ActivityIndicator color={colors.primary} />
+          <ThemedText type="small" themeColor="textSecondary" style={styles.stateText}>
+            {waking ? t('premium.analysisWaking') : t('premium.analysisLoading')}
+          </ThemedText>
+        </View>
       </View>
     );
   }
 
   if (error || !insights) {
     return (
-      <View style={styles.errorWrap}>
-        <View style={styles.errHeader}>
-          <View style={[styles.errRule, { backgroundColor: colors.danger }]} />
-          <ThemedText type="smallBold" style={[styles.errTitle, { color: colors.danger }]}>
-            โหลด Premium insights ไม่สำเร็จ
+      <View style={styles.container}>
+        {tabs}
+        <View style={styles.errorWrap}>
+          <View style={styles.errHeader}>
+            <View style={[styles.errRule, { backgroundColor: colors.danger }]} />
+            <ThemedText type="smallBold" style={[styles.errTitle, { color: colors.danger }]}>
+              {t('premium.loadFailed')}
+            </ThemedText>
+          </View>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.errBody}>
+            {error ?? t('premium.unknownError')}
           </ThemedText>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('common.retry')}
+            onPress={retry}
+            style={({ pressed }) => [
+              styles.retry,
+              { backgroundColor: colors.primary },
+              pressed && styles.pressed,
+            ]}>
+            <ThemedText
+              type="smallBold"
+              style={[styles.retryText, { color: colors.onPrimary }]}>
+              {t('common.retry')}
+            </ThemedText>
+          </Pressable>
         </View>
-        <ThemedText type="small" themeColor="textSecondary" style={styles.errBody}>
-          {error ?? 'Unknown error.'}
-        </ThemedText>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="ลองอีกครั้ง"
-          onPress={retry}
-          style={({ pressed }) => [
-            styles.retry,
-            { backgroundColor: colors.primary },
-            pressed && styles.pressed,
-          ]}>
-          <ThemedText type="smallBold" style={[styles.retryText, { color: colors.onPrimary }]}>
-            ลองอีกครั้ง (Retry)
-          </ThemedText>
-        </Pressable>
       </View>
     );
   }
@@ -141,13 +259,18 @@ export function PremiumInsightsPanel() {
 
   return (
     <View style={styles.container}>
+      {tabs}
+
       <View style={styles.metaRow}>
         <StatusPill status={insights.status} />
         <ThemedText type="small" themeColor="textMuted" style={styles.metaText}>
-          {formatCount(insights.draws_analyzed)} draws
           {insights.latest_draw
-            ? ` · latest ${insights.latest_draw.first_prize} (${formatDate(insights.latest_draw.draw_date)})`
-            : ''}
+            ? t('premium.metaRow', {
+                count: formatCount(insights.draws_analyzed),
+                prize: insights.latest_draw.first_prize,
+                date: formatLocalizedDate(insights.latest_draw.draw_date, language),
+              })
+            : t('common.draws', { count: insights.draws_analyzed })}
         </ThemedText>
       </View>
 
@@ -172,7 +295,7 @@ export function PremiumInsightsPanel() {
       {positions.length === 0 ? (
         <View style={styles.emptyBox}>
           <ThemedText type="small" themeColor="textSecondary" style={styles.emptyText}>
-            ยังมีข้อมูลไม่พอสำหรับการวิเคราะห์รายตำแหน่ง — ต้องมีประวัติการออกรางวัลอย่างน้อย 5 งวด
+            {t('premium.emptyState')}
           </ThemedText>
         </View>
       ) : (
@@ -193,9 +316,10 @@ export function PremiumInsightsPanel() {
 /** Small status pill mirroring the endpoint's `status` field. */
 function StatusPill({ status }: { status: PredictionStatus }) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
   const tone =
     status === 'ok' ? colors.success : status === 'limited' ? colors.warning : colors.neutral;
-  const label = status === 'ok' ? 'OK' : status === 'limited' ? 'LIMITED' : 'NO DATA';
+  const label = t(STATUS_KEYS[status] ?? 'status.insufficientData');
 
   return (
     <View style={[styles.statusPill, { borderColor: tone }]}>
@@ -219,12 +343,19 @@ function StatusPill({ status }: { status: PredictionStatus }) {
  */
 function PositionBlock({ estimate, first }: { estimate: PositionalEstimate; first: boolean }) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
+  const label = t(POSITION_LABEL_KEYS[estimate.name]);
   const bridge =
     estimate.conditioned_on === null
-      ? 'leading digit · marginal only'
+      ? t('premium.leadingDigit')
       : estimate.conditioned_digit
-        ? `given ${prettyPosition(estimate.conditioned_on)} = ${estimate.conditioned_digit}`
-        : 'marginal only';
+        ? t('premium.givenState', {
+            // The position it conditions on is named in the reader's language, not
+            // in the backend's snake_case key.
+            position: t(POSITION_LABEL_KEYS[estimate.conditioned_on]),
+            digit: estimate.conditioned_digit,
+          })
+        : t('premium.marginalOnly');
 
   /**
    * The pill reports the basis the *ranking* used, which is not the same question
@@ -234,10 +365,10 @@ function PositionBlock({ estimate, first }: { estimate: PositionalEstimate; firs
    */
   const basisLabel =
     estimate.basis === 'conditional'
-      ? 'CONDITIONAL'
+      ? t('premium.basisConditional')
       : estimate.usable
-        ? 'MARGINAL'
-        : 'THIN ROW';
+        ? t('premium.basisMarginal')
+        : t('premium.basisThinRow');
   const basisTone =
     estimate.basis === 'conditional'
       ? colors.success
@@ -267,7 +398,7 @@ function PositionBlock({ estimate, first }: { estimate: PositionalEstimate; firs
             { borderColor: `${colors.gold}80`, backgroundColor: `${colors.gold}14` },
           ]}>
           <ThemedText type="small" style={[styles.posPillText, { color: colors.accent }]}>
-            {estimate.label}
+            {label}
           </ThemedText>
         </View>
         <View style={[styles.basisPill, { backgroundColor: basisBackground }]}>
@@ -278,7 +409,7 @@ function PositionBlock({ estimate, first }: { estimate: PositionalEstimate; firs
       </View>
 
       <ThemedText type="small" themeColor="textMuted" style={styles.bridge}>
-        {bridge} · {formatCount(estimate.support)} draws
+        {bridge} · {t('common.draws', { count: estimate.support })}
       </ThemedText>
 
       <View style={styles.picks}>
@@ -293,6 +424,7 @@ function PositionBlock({ estimate, first }: { estimate: PositionalEstimate; firs
 /** One recommended digit, with its probability meter and the model's reason. */
 function PickRow({ entry, rank }: { entry: PositionalDigit; rank: number }) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
   const percent = entry.probability * 100;
   const highlight = rank === 0;
 
@@ -315,8 +447,11 @@ function PickRow({ entry, rank }: { entry: PositionalDigit; rank: number }) {
         <View style={styles.pickHead}>
           <ThemedText style={styles.percent}>{formatPercent(entry.probability)}</ThemedText>
           <ThemedText type="small" themeColor="textMuted" style={styles.lift}>
-            x{entry.lift.toFixed(2)} vs marginal · {formatCount(entry.count)}/
-            {formatCount(entry.support)}
+            {t('premium.vsMarginal', {
+              lift: entry.lift.toFixed(2),
+              count: formatCount(entry.count),
+              support: formatCount(entry.support),
+            })}
           </ThemedText>
         </View>
 

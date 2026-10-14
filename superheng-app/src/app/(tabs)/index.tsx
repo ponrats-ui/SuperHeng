@@ -30,7 +30,8 @@ import {
   type ChannelKey,
 } from '@/lib/api';
 import { getNextDrawAt } from '@/lib/draw';
-import { formatCount, formatDate, formatThaiDate } from '@/lib/format';
+import { formatCount, formatLocalizedDate } from '@/lib/format';
+import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
 /** The two independently drawn 2-digit positions the backend ranks. */
 type Market = ChannelKey;
@@ -44,23 +45,32 @@ type Market = ChannelKey;
  */
 type ConnectionState = 'live' | 'connecting' | 'waking' | 'offline';
 
-/** Badge wording per state. Static, so it lives outside the component. */
-const CONNECTION_LABEL: Record<ConnectionState, string> = {
-  live: 'LIVE',
-  connecting: 'CONNECTING',
-  waking: 'WAKING',
-  offline: 'OFFLINE',
+/**
+ * Why a load failed.
+ *
+ * The generic case is stored as a *kind* rather than a message so the string is
+ * translated at render time: putting `t()` inside the fetch effect would make the
+ * effect depend on the language and refetch the whole payload on a toggle.
+ */
+type LoadError = { kind: 'api'; message: string } | { kind: 'unknown' };
+
+/** Badge wording per state, as keys — the wording itself is language-dependent. */
+const CONNECTION_LABEL: Record<ConnectionState, TranslationKey> = {
+  live: 'dashboard.live',
+  connecting: 'dashboard.connecting',
+  waking: 'dashboard.wakingLabel',
+  offline: 'dashboard.offline',
 };
 
-const MARKET_OPTIONS = [
-  { key: 'top' as const, label: 'Top Position' },
-  { key: 'bottom' as const, label: 'Bottom Position' },
+const MARKET_OPTIONS: readonly { key: Market; labelKey: TranslationKey }[] = [
+  { key: 'top', labelKey: 'dashboard.topPosition' },
+  { key: 'bottom', labelKey: 'dashboard.bottomPosition' },
 ];
 
 /** Display names for the signals the backend can actually apply today. */
-const SIGNAL_LABELS: Record<string, string> = {
-  frequency: 'Frequency',
-  markov: 'Markov Chain',
+const SIGNAL_LABELS: Record<string, TranslationKey> = {
+  frequency: 'models.frequency',
+  markov: 'models.markov',
 };
 
 /**
@@ -70,26 +80,39 @@ const SIGNAL_LABELS: Record<string, string> = {
  * mock layer this screen used to read claimed ARIMA and Monte Carlo were live,
  * which stopped being true the moment real data arrived.
  */
-const PLANNED_SIGNALS = [
-  { key: 'arima', label: 'ARIMA', detail: 'Time-series drift' },
-  { key: 'monte', label: 'Monte Carlo', detail: '10k simulations' },
-  { key: 'lstm', label: 'LSTM', detail: 'Sequence net' },
-] as const;
+const PLANNED_SIGNALS: readonly {
+  key: string;
+  labelKey: TranslationKey;
+  detailKey: TranslationKey;
+}[] = [
+  { key: 'arima', labelKey: 'models.timeseries', detailKey: 'models.detailTimeseries' },
+  { key: 'monte', labelKey: 'models.montecarlo', detailKey: 'models.detailMontecarlo' },
+  { key: 'lstm', labelKey: 'models.lstm', detailKey: 'models.detailLstm' },
+];
 
-/** Verdict wording per signal tone. Mirrors the backend's `tone` field. */
-const TONE_VERDICT: Record<SignalTone, string> = {
-  high: 'Strong signal',
-  medium: 'Positive signal',
-  low: 'Weak signal',
-  cold: 'No meaningful signal',
+/** Verdict wording per signal tone, as keys. Mirrors the backend's `tone` field. */
+const TONE_VERDICT: Record<SignalTone, TranslationKey> = {
+  high: 'tone.high',
+  medium: 'tone.medium',
+  low: 'tone.low',
+  cold: 'tone.cold',
+};
+
+/** Hero confidence pill, per tone. */
+const TONE_CONFIDENCE: Record<SignalTone, TranslationKey> = {
+  high: 'dashboard.highConfidence',
+  medium: 'dashboard.mediumConfidence',
+  low: 'dashboard.lowConfidence',
+  cold: 'dashboard.coldConfidence',
 };
 
 export default function DashboardScreen() {
   const { colors } = useAppTheme();
+  const { t, language } = useTranslation();
   const [market, setMarket] = useState<Market>('top');
 
   const [predictions, setPredictions] = useState<BasicPredictions | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LoadError | null>(null);
   const [loading, setLoading] = useState(true);
   /**
    * True once the transport has started retrying — i.e. the first attempt did
@@ -133,9 +156,7 @@ export default function DashboardScreen() {
         // Drop the stale numbers rather than leaving them on screen beside an
         // error: the previous run's picks are no longer what the server says.
         setPredictions(null);
-        setError(
-          isApiError(caught) ? caught.message : 'Something went wrong while loading predictions.'
-        );
+        setError(isApiError(caught) ? { kind: 'api', message: caught.message } : { kind: 'unknown' });
         setLoading(false);
       }
     );
@@ -175,8 +196,8 @@ export default function DashboardScreen() {
     () =>
       Object.keys(weights)
         .filter((key) => weights[key] > 0)
-        .map((key) => SIGNAL_LABELS[key] ?? key),
-    [weights]
+        .map((key) => (SIGNAL_LABELS[key] ? t(SIGNAL_LABELS[key]) : key)),
+    [weights, t]
   );
 
   /**
@@ -194,11 +215,15 @@ export default function DashboardScreen() {
     if (reported.length > 0) {
       return reported.map((status) => ({
         key: status.key as string,
-        label: status.label,
+        // The chip shows the localised model name; the API's own label is only a
+        // fallback for a model this build has never heard of.
+        label: SIGNAL_LABELS[status.key as string]
+          ? t(SIGNAL_LABELS[status.key as string])
+          : status.label,
         detail:
           status.status === 'active'
-            ? `${Math.round(status.weight * 100)}% weight`
-            : (MODEL_REASON_TAGS[status.reason] ?? 'Neutral'),
+            ? t('common.weight', { percent: Math.round(status.weight * 100) })
+            : t(MODEL_REASON_TAGS[status.reason] ?? 'models.neutral'),
         active: status.status === 'active',
       }));
     }
@@ -208,22 +233,24 @@ export default function DashboardScreen() {
         .filter(([, weight]) => weight > 0)
         .map(([key, weight]) => ({
           key,
-          label: SIGNAL_LABELS[key] ?? key,
-          detail: `${Math.round(weight * 100)}% weight`,
+          label: SIGNAL_LABELS[key] ? t(SIGNAL_LABELS[key]) : key,
+          detail: t('common.weight', { percent: Math.round(weight * 100) }),
           active: true,
         })),
       ...PLANNED_SIGNALS.map((signal) => ({
-        key: signal.key as string,
-        label: signal.label,
-        detail: `${signal.detail} · planned`,
+        key: signal.key,
+        label: t(signal.labelKey),
+        detail: t('models.planned', { detail: t(signal.detailKey) }),
         active: false,
       })),
     ];
-  }, [channel, weights]);
+  }, [channel, weights, t]);
 
   const dataLine = predictions?.latest_draw
-    ? `ข้อมูลถึงงวด ${formatThaiDate(new Date(predictions.latest_draw.draw_date))} · ` +
-      `${formatCount(predictions.draws_analyzed)} งวด`
+    ? t('dashboard.dataThrough', {
+        date: formatLocalizedDate(predictions.latest_draw.draw_date, language),
+        count: formatCount(predictions.draws_analyzed),
+      })
     : null;
 
   /**
@@ -243,14 +270,14 @@ export default function DashboardScreen() {
   return (
     <PageScaffold>
       <AppHeader
-        subtitle="Probability intelligence"
+        subtitle={t('header.dashboardSubtitle')}
         right={
           <View style={styles.headerActions}>
             <LiveBadge state={connection} />
             <HeaderIconButton
               ios="info.circle"
               android="info"
-              label="เบื้องหลังการคำนวณ"
+              label={t('dashboard.behindTheMath')}
               onPress={() => router.push('/about')}
             />
           </View>
@@ -265,13 +292,15 @@ export default function DashboardScreen() {
         <View style={[styles.noticeRule, { backgroundColor: colors.gold }]} />
         <View style={styles.noticeBody}>
           <ThemedText style={styles.noticeText}>
-            วิเคราะห์เพื่อประกอบการตัดสินใจ งวดวันที่:{' '}
+            {t('dashboard.tagline')}{' · '}
             <ThemedText style={[styles.noticeDate, { color: colors.gold }]}>
-              {formatThaiDate(drawAt)}
+              {t('dashboard.drawDateLabel', {
+                date: formatLocalizedDate(drawAt, language),
+              })}
             </ThemedText>
           </ThemedText>
           <ThemedText type="small" themeColor="textMuted" style={styles.noticeSub}>
-            ระบบจะรีเซ็ตและคำนวณสถิติใหม่โดยอัตโนมัติหลังหวยออก เพื่อเตรียมพร้อมสำหรับงวดถัดไป
+            {t('dashboard.resetNotice')}
           </ThemedText>
           {dataLine ? (
             <ThemedText type="small" themeColor="textMuted" style={styles.noticeSub}>
@@ -286,22 +315,26 @@ export default function DashboardScreen() {
         <View style={styles.drawHeader}>
           <View style={styles.drawTitle}>
             <ThemedText type="small" themeColor="textMuted" style={styles.eyebrow}>
-              NEXT DRAW
+              {t('dashboard.nextDraw')}
             </ThemedText>
-            <ThemedText type="smallBold">{DRAW_META.title}</ThemedText>
+            <ThemedText type="smallBold">{t('dashboard.governmentLottery')}</ThemedText>
           </View>
           <Countdown target={drawAt} compact />
         </View>
 
         <View style={styles.metaRow}>
-          <MetaItem label="Jackpot" value={DRAW_META.jackpot} color={colors.gold} />
+          <MetaItem label={t('dashboard.jackpot')} value={DRAW_META.jackpot} color={colors.gold} />
           <MetaItem
-            label="Draws analysed"
+            label={t('dashboard.drawsAnalysed')}
             value={predictions ? formatCount(predictions.draws_analyzed) : '—'}
           />
           <MetaItem
-            label="Latest draw"
-            value={predictions?.latest_draw ? formatDate(predictions.latest_draw.draw_date) : '—'}
+            label={t('dashboard.latestDraw')}
+            value={
+              predictions?.latest_draw
+                ? formatLocalizedDate(predictions.latest_draw.draw_date, language)
+                : '—'
+            }
           />
         </View>
       </Card>
@@ -312,7 +345,12 @@ export default function DashboardScreen() {
       */}
       {loading ? <LoadingCard waking={waking} /> : null}
 
-      {!loading && error ? <ErrorCard message={error} onRetry={retry} /> : null}
+      {!loading && error ? (
+        <ErrorCard
+          message={error.kind === 'api' ? error.message : t('dashboard.unknownError')}
+          onRetry={retry}
+        />
+      ) : null}
 
       {!loading && !error && predictions && !pick ? (
         <InsufficientCard predictions={predictions} />
@@ -326,22 +364,24 @@ export default function DashboardScreen() {
               <View style={styles.heroTopRow}>
                 <View style={styles.tag}>
                   <ThemedText style={[styles.tagText, { color: colors.gold }]}>
-                    AI TOP PICK
+                    {t('dashboard.aiTopPick')}
                   </ThemedText>
                 </View>
                 <View style={styles.confidencePill}>
                   <View style={styles.liveDot} />
                   <ThemedText style={styles.confidenceText}>
-                    {pick.tone.toUpperCase()} CONFIDENCE
+                    {t(TONE_CONFIDENCE[pick.tone])}
                   </ThemedText>
                 </View>
               </View>
 
               <View style={styles.heroMain}>
                 <View style={styles.heroCodeBlock}>
-                  <ThemedText style={styles.heroPositional}>2-DIGIT · TOP POSITION</ThemedText>
+                  <ThemedText style={styles.heroPositional}>
+                    {t('dashboard.topPosition2Digit')}
+                  </ThemedText>
                   <ThemedText style={styles.heroCode}>{pick.code}</ThemedText>
-                  <ThemedText style={styles.heroVerdict}>{TONE_VERDICT[pick.tone]}</ThemedText>
+                  <ThemedText style={styles.heroVerdict}>{t(TONE_VERDICT[pick.tone])}</ThemedText>
                   <ThemedText style={styles.heroModels}>{modelNames.join('  ·  ')}</ThemedText>
                 </View>
 
@@ -352,7 +392,7 @@ export default function DashboardScreen() {
                   color={Brand.goldBright}
                   trackColor="rgba(255,255,255,0.22)"
                   textColor="rgba(255,255,255,0.75)"
-                  label="Heng score"
+                  label={t('dashboard.hengScore')}
                 />
               </View>
 
@@ -365,17 +405,17 @@ export default function DashboardScreen() {
               */}
               <View style={styles.heroFooter}>
                 <HeroStat
-                  label="Sample size"
-                  value={`${formatCount(predictions.draws_analyzed)} draws`}
+                  label={t('dashboard.sampleSize')}
+                  value={t('common.draws', { count: predictions.draws_analyzed })}
                 />
-                <HeroStat label="Board state" value={topChannel.current_state} />
+                <HeroStat label={t('dashboard.boardState')} value={topChannel.current_state} />
                 <HeroStat
-                  label="Markov support"
-                  value={`${topChannel.markov.support} transitions`}
+                  label={t('dashboard.markovSupport')}
+                  value={t('dashboard.transitions', { count: topChannel.markov.support })}
                 />
                 <HeroStat
-                  label="Frequency lift"
-                  value={`${pick.evidence.frequency.lift.toFixed(2)}× uniform`}
+                  label={t('dashboard.frequencyLift')}
+                  value={t('rank.uniformLift', { lift: pick.evidence.frequency.lift.toFixed(2) })}
                 />
               </View>
             </View>
@@ -384,16 +424,31 @@ export default function DashboardScreen() {
           {/* Rankings */}
           <Card>
             <SectionHeader
-              title="Rankings"
+              title={t('dashboard.rankings')}
               subtitle={
                 channel
-                  ? `${channel.label} · ${formatCount(channel.draws)} draws analysed · state ${channel.current_state}`
-                  : '2-digit position model'
+                  ? t('dashboard.analysedState', {
+                      label: t(
+                        market === 'top'
+                          ? 'dashboard.topPosition2Digit'
+                          : 'dashboard.bottomPosition2Digit'
+                      ),
+                      count: formatCount(channel.draws),
+                      state: channel.current_state,
+                    })
+                  : t('dashboard.positionModelFallback')
               }
             />
 
             <View style={styles.controlRow}>
-              <SegmentedControl options={MARKET_OPTIONS} value={market} onChange={setMarket} />
+              <SegmentedControl
+                options={MARKET_OPTIONS.map((option) => ({
+                  key: option.key,
+                  label: t(option.labelKey),
+                }))}
+                value={market}
+                onChange={setMarket}
+              />
             </View>
 
             <View style={styles.list}>
@@ -408,21 +463,22 @@ export default function DashboardScreen() {
             </View>
 
             <ThemedText type="small" themeColor="textMuted" style={styles.listNote}>
-              Bar length is the Heng score (0–100). The pill is the model&apos;s literal per-draw
-              probability, where 1.0% is the uniform baseline across 100 codes. All four model
-              badges are shown on every pick — a greyed badge is a model that contributed no
-              measured evidence there; tap it for the reason.
+              {t('dashboard.barIsScore')}
             </ThemedText>
           </Card>
 
           {/* Model ensemble */}
           <Card>
             <SectionHeader
-              title="Model ensemble"
+              title={t('dashboard.modelEnsembleTitle')}
               subtitle={
                 channel
-                  ? `All four models · what feeds the ${market}-position blend`
-                  : 'Signals currently feeding the prediction'
+                  ? t('dashboard.modelEnsemble', {
+                      market: t(
+                        market === 'top' ? 'dashboard.marketTop' : 'dashboard.marketBottom'
+                      ),
+                    })
+                  : t('dashboard.signalsFeeding')
               }
             />
             <View style={styles.chips}>
@@ -444,7 +500,10 @@ export default function DashboardScreen() {
           */}
           {predictions.warnings.length > 0 ? (
             <Card>
-              <SectionHeader title="Data conditions" subtitle={`Model status: ${predictions.status}`} />
+              <SectionHeader
+                title={t('dashboard.dataConditions')}
+                subtitle={t('dashboard.modelStatus', { status: predictions.status })}
+              />
               <View style={styles.warnList}>
                 {predictions.warnings.map((warning) => (
                   <ThemedText
@@ -473,12 +532,12 @@ export default function DashboardScreen() {
       */}
       <Card>
         <SectionHeader
-          title="Premium insights"
-          subtitle="Bayesian positional model · รางวัลที่ 1"
+          title={t('premium.title')}
+          subtitle={t('premium.subtitle')}
           action={
             <View style={[styles.premiumPill, { borderColor: `${colors.gold}80` }]}>
               <ThemedText type="small" style={[styles.premiumPillText, { color: colors.accent }]}>
-                ✨ PREMIUM MODE
+                {t('premium.modePill')}
               </ThemedText>
             </View>
           }
@@ -494,22 +553,21 @@ export default function DashboardScreen() {
       */}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="สนับสนุนนักพัฒนา"
+        accessibilityLabel={t('dashboard.donateSub')}
         onPress={() => router.push('/donate')}
         style={({ pressed }) => [
           styles.donate,
           { borderColor: colors.gold, backgroundColor: colors.backgroundElement },
           pressed && styles.pressed,
         ]}>
-        <ThemedText style={styles.donateTitle}>💸 ถูกรางวัล? เลี้ยงกาแฟทีมงาน</ThemedText>
+        <ThemedText style={styles.donateTitle}>{t('dashboard.donateCta')}</ThemedText>
         <ThemedText type="small" themeColor="textMuted" style={styles.donateSub}>
-          สนับสนุนนักพัฒนา (Donate)
+          {t('dashboard.donateSub')}
         </ThemedText>
       </Pressable>
 
       <ThemedText type="small" themeColor="textMuted" style={styles.disclaimer}>
-        Predictions are statistical estimates from historical draw data. No model can guarantee an
-        outcome — play responsibly.
+        {t('dashboard.disclaimer')}
       </ThemedText>
     </PageScaffold>
   );
@@ -525,6 +583,7 @@ export default function DashboardScreen() {
  */
 function LiveBadge({ state }: { state: ConnectionState }) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
   const dot = {
     live: colors.success,
     connecting: colors.neutral,
@@ -536,7 +595,7 @@ function LiveBadge({ state }: { state: ConnectionState }) {
     <View style={[styles.liveBadge, { backgroundColor: colors.backgroundElement }]}>
       <View style={[styles.liveDot, { backgroundColor: dot }]} />
       <ThemedText type="small" style={[styles.liveText, { color: colors.textSecondary }]}>
-        {CONNECTION_LABEL[state]}
+        {t(CONNECTION_LABEL[state])}
       </ThemedText>
     </View>
   );
@@ -552,14 +611,13 @@ function LiveBadge({ state }: { state: ConnectionState }) {
  */
 function LoadingCard({ waking }: { waking: boolean }) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
   return (
     <Card>
       <View style={styles.stateBody}>
         <ActivityIndicator color={colors.primary} />
         <ThemedText type="small" themeColor="textSecondary" style={styles.stateText}>
-          {waking
-            ? 'กำลังปลุกเซิร์ฟเวอร์… (เซิร์ฟเวอร์สลีปอยู่ อาจใช้เวลาถึง 1 นาที)'
-            : 'กำลังโหลดผลวิเคราะห์จากเซิร์ฟเวอร์…'}
+          {waking ? t('dashboard.waking') : t('dashboard.loadingPredictions')}
         </ThemedText>
         <ThemedText type="small" themeColor="textMuted" style={styles.stateHint}>
           {BASE_URL}/api/predict/basic
@@ -572,12 +630,13 @@ function LoadingCard({ waking }: { waking: boolean }) {
 /** Shown when the call failed — the one state that is genuinely an error. */
 function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void }) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
   return (
     <Card>
       <View style={styles.errHeader}>
         <View style={[styles.errRule, { backgroundColor: colors.danger }]} />
         <ThemedText type="smallBold" style={[styles.errTitle, { color: colors.danger }]}>
-          โหลดข้อมูลไม่สำเร็จ
+          {t('dashboard.connectFailed')}
         </ThemedText>
       </View>
 
@@ -585,12 +644,12 @@ function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void 
         {message}
       </ThemedText>
       <ThemedText type="small" themeColor="textMuted" style={styles.errHint}>
-        ต้องรัน backend ที่ {BASE_URL} ก่อน — uvicorn main:app --reload
+        {t('dashboard.connectFailedBody', { url: BASE_URL })}
       </ThemedText>
 
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="ลองอีกครั้ง"
+        accessibilityLabel={t('common.retry')}
         onPress={onRetry}
         style={({ pressed }) => [
           styles.retry,
@@ -598,7 +657,7 @@ function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void 
           pressed && styles.pressed,
         ]}>
         <ThemedText type="smallBold" style={[styles.retryText, { color: colors.onPrimary }]}>
-          ลองอีกครั้ง (Retry)
+          {t('common.retry')}
         </ThemedText>
       </Pressable>
     </Card>
@@ -613,15 +672,15 @@ function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void 
  * failure so the client can render this instead of an error.
  */
 function InsufficientCard({ predictions }: { predictions: BasicPredictions }) {
+  const { t } = useTranslation();
   return (
     <Card>
       <SectionHeader
-        title="ยังไม่มีข้อมูลเพียงพอ"
-        subtitle={`Model status: ${predictions.status}`}
+        title={t('dashboard.emptyTitle')}
+        subtitle={t('dashboard.modelStatus', { status: predictions.status })}
       />
       <ThemedText type="small" themeColor="textSecondary" style={styles.errBody}>
-        ฐานข้อมูลมี {formatCount(predictions.draws_analyzed)} งวด ระบบจึงยังไม่สร้างอันดับ —
-        การจัดอันดับจากข้อมูลเท่านี้จะเป็นตัวเลขเดาสุ่ม ไม่ใช่ผลวิเคราะห์
+        {t('dashboard.emptyBody', { count: formatCount(predictions.draws_analyzed) })}
       </ThemedText>
       {predictions.warnings[0] ? (
         <ThemedText type="small" themeColor="textMuted" style={styles.errHint}>

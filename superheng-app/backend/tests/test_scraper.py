@@ -954,7 +954,7 @@ class _FakeClient:
         return _FakeTable(self.calls)
 
 
-def test_upsert_targets_draw_date_and_batches():
+def test_upsert_targets_the_type_and_date_pair_and_batches():
     client = _FakeClient()
     rows = [
         {"draw_date": f"2026-01-{day:02d}", "first_prize": "123456", "bottom_two": "12"}
@@ -963,7 +963,10 @@ def test_upsert_targets_draw_date_and_batches():
     written = scraper.upsert_rows(client, rows, batch_size=2)
 
     assert [len(batch) for batch, _ in client.calls] == [2, 2, 1]
-    assert {target for _, target in client.calls} == {"draw_date"}
+    # The pair, not `draw_date` alone: it has to match the unique key in
+    # schema.sql, and a date-only target would let another country's draw on the
+    # same date overwrite this one.
+    assert {target for _, target in client.calls} == {"lottery_type,draw_date"}
     # No representation came back, but the rows were still sent and counted.
     assert written == 5
 

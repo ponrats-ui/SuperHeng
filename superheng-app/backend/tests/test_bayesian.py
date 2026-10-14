@@ -364,14 +364,22 @@ def test_a_ledger_below_the_floor_publishes_no_picks():
 @pytest.fixture()
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(main, "get_supabase", lambda: object())
-    monkeypatch.setattr(main, "fetch_draw_history", lambda _client, limit: ledger_rows(limit))
+    monkeypatch.setattr(
+        main,
+        "fetch_draw_history",
+        lambda _client, limit, _type=main.LotteryType.thai: ledger_rows(limit),
+    )
     return TestClient(main.app)
 
 
 @pytest.fixture()
 def empty_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(main, "get_supabase", lambda: object())
-    monkeypatch.setattr(main, "fetch_draw_history", lambda _client, limit: [])
+    monkeypatch.setattr(
+        main,
+        "fetch_draw_history",
+        lambda _client, limit, _type=main.LotteryType.thai: [],
+    )
     return TestClient(main.app)
 
 
@@ -432,7 +440,11 @@ def test_a_model_failure_becomes_a_500_with_detail(monkeypatch: pytest.MonkeyPat
     import models.bayesian as bayesian
 
     monkeypatch.setattr(main, "get_supabase", lambda: object())
-    monkeypatch.setattr(main, "fetch_draw_history", lambda _client, limit: ledger_rows(limit))
+    monkeypatch.setattr(
+        main,
+        "fetch_draw_history",
+        lambda _client, limit, _type=main.LotteryType.thai: ledger_rows(limit),
+    )
 
     def explode(*_args, **_kwargs):
         raise RuntimeError("positional model exploded")
@@ -454,7 +466,7 @@ def test_a_model_failure_becomes_a_500_with_detail(monkeypatch: pytest.MonkeyPat
 def test_a_database_failure_becomes_a_500_with_detail(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(main, "get_supabase", lambda: object())
 
-    def explode(_client, _limit):
+    def explode(_client, _limit, _type):
         raise RuntimeError("PGRST205 could not find the table")
 
     monkeypatch.setattr(main, "fetch_draw_history", explode)
@@ -463,7 +475,9 @@ def test_a_database_failure_becomes_a_500_with_detail(monkeypatch: pytest.Monkey
     )
 
     assert response.status_code == 500
-    assert "Failed to fetch draw history" in response.json()["detail"]
+    # The detail names the ledger that failed, so a missing column or an unapplied
+    # migration says which country's query broke.
+    assert "Failed to fetch thai draw history" in response.json()["detail"]
 
 
 def test_out_of_range_limit_is_rejected(client: TestClient):

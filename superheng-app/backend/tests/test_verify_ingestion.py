@@ -45,6 +45,12 @@ class _FakeBuilder:
         self._desc = False
         self._limit: int | None = None
         self._range: tuple[int, int] | None = None
+        self._filters: list[tuple[str, str]] = []
+
+    def eq(self, column, value):
+        assert column == "lottery_type", column
+        self._filters.append((column, value))
+        return self
 
     def order(self, column, desc: bool = False):
         assert column == "draw_date", column
@@ -62,6 +68,9 @@ class _FakeBuilder:
     def execute(self):
         self._client.requests.append(self)
         rows = list(self._client.rows)  # already ascending by draw_date
+        # Filtered before the range/limit, as PostgREST applies them.
+        for column, value in self._filters:
+            rows = [row for row in rows if row.get(column) == value]
 
         if self._range is not None:
             start, end = self._range
@@ -99,17 +108,22 @@ def ledger(
     newest: date | None = None,
     first_prize: str = "402701",
     bottom_two: str = "70",
+    lottery_type: str = "thai",
 ) -> list[dict[str, str]]:
     """A ledger of ``count`` draws, 15 days apart, ending at ``newest``.
 
     The newest row carries the caller's prize values so the shape checks have
-    something to inspect; every older row is deliberately unremarkable.
+    something to inspect; every older row is deliberately unremarkable. Every row
+    carries its ``lottery_type``, because the table now holds three ledgers and
+    every read is scoped to one of them.
     """
     newest = newest or (date.today() - timedelta(days=3))
+    filler_prize = "12345" if lottery_type == "vietnam" else "123456"
     return [
         {
+            "lottery_type": lottery_type,
             "draw_date": (newest - timedelta(days=15 * i)).isoformat(),
-            "first_prize": first_prize if i == 0 else "123456",
+            "first_prize": first_prize if i == 0 else filler_prize,
             "bottom_two": bottom_two if i == 0 else "42",
         }
         for i in range(count)
@@ -391,3 +405,74 @@ def test_main_defaults_match_the_documented_values():
     args = vi._parse_args([])
     assert args.min_rows == 1
     assert args.max_staleness_days == 45
+    assert args.type == "thai"
+
+
+def test_main_accepts_every_ledger_and_refuses_an_unknown_one():
+    for kind in ("thai", "laos", "vietnam"):
+        assert vi._parse_args(["--type", kind]).type == kind
+    with pytest.raises(SystemExit):
+        vi._parse_args(["--type", "burma"])
+
+
+# ---------------------------------------------------------------------------
+# One ledger at a time
+# ---------------------------------------------------------------------------
+
+
+def test_every_read_is_scoped_to_the_requested_ledger():
+    """Without the filter, a Lao job would judge itself against a Thai draw."""
+    rows = ledger(3, newest=date(2026, 10, 13), lottery_type="laos") + ledger(
+        5, newest=date(2026, 10, 13), lottery_type="vietnam", first_prize="53618"
+    )
+    client = _FakeClient(rows)
+
+    assert vi.count_rows(client, "laos") == 3
+    assert vi.count_rows(client, "vietnam") == 5
+    assert vi.count_rows(client, "thai") == 0
+    # Every read carried the filter, not just the count, and it named one country.
+    assert all(len(builder._filters) == 1 for builder in client.requests)
+    assert [builder._filters[0][1] for builder in client.requests] == [
+        "laos",
+        "vietnam",
+        "thai",
+    ]
+    assert vi.newest_row(client, "laos")["first_prize"] == "402701"
+    assert vi.newest_row(client, "vietnam")["first_prize"] == "53618"
+    assert [builder._filters[0][1] for builder in client.requests[-2:]] == [
+        "laos",
+        "vietnam",
+    ]
+
+
+def test_fetch_ledger_state_reads_one_country_at_a_time():
+    rows = ledger(2, lottery_type="vietnam", first_prize="53618", bottom_two="18") + ledger(
+        400, lottery_type="thai"
+    )
+
+    vietnam = vi.fetch_ledger_state(_FakeClient(rows), "vietnam")
+
+    assert vietnam.rows == 2
+    assert vietnam.newest_first_prize == "53618"
+
+
+def test_the_shape_check_follows_the_ledger_width():
+    """A five-digit Vietnamese prize is correct; a five-digit Thai one is not."""
+    five = state_for(first_prize="53618", bottom_two="18")
+    six = state_for(first_prize="402701", bottom_two="01")
+
+    assert vi.check_ledger(five, today=date.today(), lottery_type="vietnam") == []
+    assert vi.check_ledger(six, today=date.today(), lottery_type="vietnam") != []
+    assert vi.check_ledger(six, today=date.today(), lottery_type="thai") == []
+    assert vi.check_ledger(six, today=date.today(), lottery_type="laos") == []
+    assert vi.check_ledger(five, today=date.today(), lottery_type="laos") != []
+
+
+def test_the_shape_check_names_the_ledger_it_rejected():
+    problems = vi.check_ledger(
+        state_for(first_prize="53618", bottom_two="18"),
+        today=date.today(),
+        lottery_type="laos",
+    )
+
+    assert any("newest laos row" in problem and "not 6 digits" in problem for problem in problems)

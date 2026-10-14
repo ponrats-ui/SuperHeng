@@ -40,8 +40,10 @@ class _FakeResponse:
 class _FakeQueryBuilder:
     """Records the query it was asked to run, then answers like PostgREST.
 
-    ``order("draw_date", desc=True).limit(n)`` returns the newest ``n`` rows **in
-    descending order**, which is the behaviour the models have to cope with.
+    ``eq("lottery_type", ...).order("draw_date", desc=True).limit(n)`` returns the
+    newest ``n`` rows **of that ledger, in descending order** — the country filter
+    is applied here, before the limit, exactly as the real backend does it. That
+    ordering is the behaviour the models have to cope with.
     """
 
     def __init__(self, client: _FakeClient, columns: str) -> None:
@@ -50,6 +52,11 @@ class _FakeQueryBuilder:
         self.order_column: str | None = None
         self.desc: bool | None = None
         self.limit_value: int | None = None
+        self.filters: list[tuple[str, str]] = []
+
+    def eq(self, column: str, value: str) -> _FakeQueryBuilder:
+        self.filters.append((column, value))
+        return self
 
     def order(self, column: str, desc: bool = False) -> _FakeQueryBuilder:
         self.order_column = column
@@ -63,7 +70,12 @@ class _FakeQueryBuilder:
     def execute(self) -> _FakeResponse:
         self._client.queries.append(self)
 
-        rows = sorted(self._client.rows, key=lambda row: row["draw_date"])
+        rows = [
+            row
+            for row in self._client.rows
+            if all(row.get(column) == value for column, value in self.filters)
+        ]
+        rows = sorted(rows, key=lambda row: row["draw_date"])
         if self.limit_value is not None:
             rows = rows[-self.limit_value :] if self.desc else rows[: self.limit_value]
         if self.desc:
@@ -124,6 +136,10 @@ def ledger(count: int, *, seed: int = 20261014) -> list[dict]:
 
     return [
         {
+            # Every row is Thai: the column exists on the real table and the
+            # query now filters on it, so the fixture has to carry it or the
+            # fake would answer every request with nothing.
+            "lottery_type": "thai",
             "draw_date": draw_date.isoformat(),
             "first_prize": "".join(str(rng.randrange(10)) for _ in range(6)),
             "bottom_two": f"{rng.randrange(100):02d}",
@@ -152,6 +168,7 @@ def test_fetch_draw_history_asks_for_the_window_newest_first():
     rows = main.fetch_draw_history(fake, 10_000)
 
     query = fake.queries[-1]
+    assert query.filters == [("lottery_type", "thai")]
     assert query.order_column == "draw_date"
     assert query.desc is True
     # Clamped at the query, not after it: the database is never asked for rows the
