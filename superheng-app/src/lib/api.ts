@@ -800,7 +800,9 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
  * populated, so the caller renders an empty state rather than an error. A
  * rejection always means the call itself failed — see `ApiError.kind`.
  *
- * @param limit How many recent draws to analyse. Omit for the whole ledger.
+ * @param limit How many of the **most recent** draws to analyse (2–400). Omit for
+ * the full rolling window, which is what the dashboard wants; the backend caps it
+ * at 400 and rejects anything larger rather than quietly clamping it.
  * @param options Per-request budgets, plus `onRetry` for a caller that wants to
  * announce that it is waiting on a cold server.
  */
@@ -821,7 +823,9 @@ export async function getBasicPredictions(
  * and `warnings` populated, so the caller renders an empty state instead of an
  * error. A rejection always means the call itself failed — see `ApiError.kind`.
  *
- * @param limit How many recent draws to analyse. Omit for the whole ledger.
+ * @param limit How many of the **most recent** draws to analyse (2–400). Omit for
+ * the full rolling window; the backend caps it at 400 and rejects anything larger
+ * rather than quietly clamping it.
  * @param options Per-request budgets, plus `onRetry` for a caller that wants to
  * announce that it is waiting on a cold server.
  */

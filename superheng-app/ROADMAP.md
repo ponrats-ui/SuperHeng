@@ -364,7 +364,9 @@ No frontend change is required here, and the commonly suggested one is a no-op a
       months (from ~2010-02) at at most two draws a month, capping the whole source at about
       **~400 rows**. No backfill window reaches 500. Replace the target with "the complete
       archive" and assert *coverage* (oldest draw present, no unexpected gaps) instead of a
-      round number that cannot be met
+      round number that cannot be met. **Measured later:** the delivered ledger is 472 rows
+      spanning 2006-12-30 to 2026-10-01, so the source reaches further back than estimated and
+      400 draws is a genuine window from 2009-12 onwards rather than the whole archive
 - [x] Re-running the same window never duplicates a draw — verified against a local PostgREST
       stub: the request carries `on_conflict=draw_date` and
       `Prefer: resolution=merge-duplicates`, and a second run sends the same conflict target
@@ -393,7 +395,10 @@ are not done, so the endpoint is unauthenticated and recomputes per request (che
       (`count`, `share`, `expected`, `lift`) — no longer just a raw count
 - [ ] Frequency rolling windows (e.g. last 25 draws) — **not done**; deliberately deferred,
       because a windowed rate is the Day 5 **Momentum** radar axis and building it twice would
-      give the app two disagreeing definitions of "recent"
+      give the app two disagreeing definitions of "recent". Not to be confused with the
+      *training* window, which now exists: every prediction model reads at most the 400 most
+      recent draws (`ROLLING_WINDOW_DRAWS` in `backend/main.py`), which decides how much history
+      the models are fitted on, not how a single frequency is weighted
 - [x] Inter-draw gaps, as `lastSeenDays` (draws since the code last appeared)
 - [x] Per-position frequency (Top / Bottom) rather than pooled counts — the two are separate
       channels end to end

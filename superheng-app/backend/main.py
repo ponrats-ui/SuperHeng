@@ -78,15 +78,41 @@ DRAWS_TABLE = "lottery_draws"
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 100
 
-# History window for the prediction models. PostgREST caps a single response at
-# 1000 rows by default, so 1000 is the largest window one request can cover; the
-# full ledger is only ~400 rows, so this reaches the whole archive today.
-DEFAULT_HISTORY_LIMIT = 1000
-MAX_HISTORY_LIMIT = 1000
+# Rolling window for the prediction models: how many of the most recent draws they
+# are allowed to see. Fixed rather than "everything we have" because the archive is
+# not a homogeneous sample — it reaches back to the machine era the models are not
+# trying to describe, and an unbounded window turns every model into a cumulative
+# average that reacts more slowly with each draw added. 400 draws is roughly the
+# last 16 years at 24 draws/year, and comfortably inside PostgREST's 1000-row cap,
+# so the window costs one request either way.
+ROLLING_WINDOW_DRAWS = 400
+
+# The prediction endpoints take their `limit` from that window: the default is the
+# whole window, and the window is also the ceiling — no request can train the models
+# on more history than this, whatever it asks for.
+DEFAULT_HISTORY_LIMIT = ROLLING_WINDOW_DRAWS
+MAX_HISTORY_LIMIT = ROLLING_WINDOW_DRAWS
+
+# One description for all three prediction endpoints, so the published window can
+# only change in one place. `limit` below the window is still honoured — that is
+# what makes a controlled backtest possible — but never beyond it.
+HISTORY_LIMIT_DESCRIPTION = (
+    f"How many of the most recent draws to analyse (2-{MAX_HISTORY_LIMIT}; "
+    f"default {DEFAULT_HISTORY_LIMIT} = the full rolling window)."
+)
 
 # Columns the models need. Selecting them explicitly keeps the payload small and
 # makes the contract obvious, rather than shipping the whole table each request.
 HISTORY_COLUMNS = "draw_date,first_prize,bottom_two"
+
+# The `limit` parameter of the three prediction endpoints is bounded by the rolling
+# window, so it is declared once here rather than repeated in each signature.
+HISTORY_LIMIT_QUERY = Query(
+    DEFAULT_HISTORY_LIMIT,
+    ge=2,
+    le=MAX_HISTORY_LIMIT,
+    description=HISTORY_LIMIT_DESCRIPTION,
+)
 
 log = logging.getLogger("superheng.api")
 logging.basicConfig(
@@ -364,17 +390,29 @@ async def health() -> dict[str, Any]:
 
 
 def fetch_draw_history(client: Client, limit: int) -> list[dict[str, Any]]:
-    """Fetch up to ``limit`` draws, newest first, for the models.
+    """Fetch at most ``limit`` draws — and never more than the rolling window.
 
-    Returned newest-first to match the table's descending order, then re-sorted
-    chronologically inside ``services.prepare_history``. Doing the ordering in
-    one place keeps "the next draw" unambiguous for the Markov step.
+    ``limit`` is clamped to :data:`ROLLING_WINDOW_DRAWS` here rather than only at the
+    endpoint, so the window is a property of the data feeding the models: an
+    endpoint, a script, or a test double all get the same bound, and asking for
+    10000 rows cannot quietly widen it. The clamped value is what the query asks
+    for, so a 400-draw window is one 400-row request rather than a full-table read
+    that the models would then throw away.
+
+    Returned **newest first**, in the table's descending order, because that is how
+    the query pages and it keeps the read simple. Ordering is *not* fixed up here:
+    each model path re-sorts chronologically in exactly one place —
+    ``services.prepare_history`` for the frequency/Markov/ARIMA/ensemble models and
+    ``models.bayesian._prepare_prizes`` for the positional one. Both are unit-tested
+    against newest-first input, which is why this function stays a plain read and
+    "the next draw" stays unambiguous for the Markov step.
     """
+    window = min(limit, ROLLING_WINDOW_DRAWS)
     response = (
         client.table(DRAWS_TABLE)
         .select(HISTORY_COLUMNS)
         .order("draw_date", desc=True)
-        .limit(limit)
+        .limit(window)
         .execute()
     )
     return response.data or []
@@ -444,15 +482,7 @@ async def latest_draws(
     response_description="Ranked picks per channel, each with a Heng Score and its evidence",
 )
 async def predict_basic(
-    limit: int = Query(
-        DEFAULT_HISTORY_LIMIT,
-        ge=2,
-        le=MAX_HISTORY_LIMIT,
-        description=(
-            "How many recent draws to analyse "
-            f"(2-{MAX_HISTORY_LIMIT}, default {DEFAULT_HISTORY_LIMIT} = the whole ledger)."
-        ),
-    ),
+    limit: int = HISTORY_LIMIT_QUERY,
 ) -> dict[str, Any]:
     """Day 3 models: frequency analysis and a first-order Markov chain.
 
@@ -509,15 +539,7 @@ async def predict_basic(
     ),
 )
 async def predict_advanced(
-    limit: int = Query(
-        DEFAULT_HISTORY_LIMIT,
-        ge=2,
-        le=MAX_HISTORY_LIMIT,
-        description=(
-            "How many recent draws to analyse "
-            f"(2-{MAX_HISTORY_LIMIT}, default {DEFAULT_HISTORY_LIMIT} = the whole ledger)."
-        ),
-    ),
+    limit: int = HISTORY_LIMIT_QUERY,
     simulations: int = Query(
         100_000,
         # The Day 5 requirement is "at least 10,000 simulated draws", so 10,000 is
@@ -629,15 +651,7 @@ async def predict_advanced(
     ),
 )
 async def predict_premium(
-    limit: int = Query(
-        DEFAULT_HISTORY_LIMIT,
-        ge=2,
-        le=MAX_HISTORY_LIMIT,
-        description=(
-            "How many recent draws to analyse "
-            f"(2-{MAX_HISTORY_LIMIT}, default {DEFAULT_HISTORY_LIMIT} = the whole ledger)."
-        ),
-    ),
+    limit: int = HISTORY_LIMIT_QUERY,
 ) -> dict[str, Any]:
     """Premium tier: a per-position Bayesian model of the 6-digit first prize.
 
