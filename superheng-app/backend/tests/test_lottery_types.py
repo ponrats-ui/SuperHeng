@@ -27,6 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+from conftest import grant_premium
 from models.bayesian import POSITION_NAMES
 
 
@@ -107,9 +108,15 @@ class _FakeClient:
 
 
 def served(monkeypatch: pytest.MonkeyPatch, rows: list[dict]) -> tuple[TestClient, _FakeClient]:
-    """A TestClient whose database is a fake holding ``rows``."""
+    """A TestClient whose database is a fake holding ``rows``, signed in as premium.
+
+    This is a plain function rather than a fixture — it takes the rows to serve — so
+    it signs the app in directly instead of requesting `premium_account`. The
+    autouse fixture in `backend/conftest.py` clears the override afterwards.
+    """
     fake = _FakeClient(rows)
     monkeypatch.setattr(main, "get_supabase", lambda: fake)
+    grant_premium()
     return TestClient(main.app), fake
 
 
@@ -168,7 +175,7 @@ def mixed() -> list[dict]:
 
 
 @pytest.fixture()
-def client() -> TestClient:
+def client(premium_account) -> TestClient:
     """A client for the route-shape tests that never reach the database."""
     return TestClient(main.app)
 

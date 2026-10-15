@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { useAppTheme } from '@/hooks/use-app-theme';
+import { AuthProvider } from '@/lib/auth';
 import { LanguageProvider } from '@/lib/i18n';
 
 SplashScreen.preventAutoHideAsync();
@@ -47,20 +48,30 @@ export default function RootLayout() {
     // Language sits above the navigator so every screen, modal and header shares one
     // language — a per-screen provider would let them disagree.
     <LanguageProvider>
-      <ThemeProvider value={navigationTheme}>
-        <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-        <AnimatedSplashOverlay />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: colors.background },
-          }}>
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="about" options={MODAL_SCREEN_OPTIONS} />
-          <Stack.Screen name="donate" options={MODAL_SCREEN_OPTIONS} />
-          <Stack.Screen name="premium" options={MODAL_SCREEN_OPTIONS} />
-        </Stack>
-      </ThemeProvider>
+      {/*
+        Auth sits above the navigator too, and for a stronger reason than the
+        language: it holds the one Supabase session and the one token-refresh
+        subscription for the whole app. Two providers would mean two clients racing
+        over one stored session, and a screen mounted outside the provider would
+        throw on `useAuth()` — which is why this wraps every route rather than just
+        the premium ones.
+      */}
+      <AuthProvider>
+        <ThemeProvider value={navigationTheme}>
+          <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+          <AnimatedSplashOverlay />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: colors.background },
+            }}>
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="about" options={MODAL_SCREEN_OPTIONS} />
+            <Stack.Screen name="donate" options={MODAL_SCREEN_OPTIONS} />
+            <Stack.Screen name="premium" options={MODAL_SCREEN_OPTIONS} />
+          </Stack>
+        </ThemeProvider>
+      </AuthProvider>
     </LanguageProvider>
   );
 }

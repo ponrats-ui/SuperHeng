@@ -19,7 +19,23 @@ Endpoints
 ``GET /api/predict/advanced`` Frequency + Markov + ARIMA + Monte Carlo -> the
                           weighted ensemble Heng Score
 ``GET /api/predict/premium`` Bayesian positional posteriors for all six digits
-                          of the first prize (Premium tier)
+                          of the first prize (Premium tier — requires a bearer
+                          token; see auth.py and schema_profiles.sql)
+``GET /api/backtest``      walk-forward replay of the recent draws: win rate, ROI
+                          and every baseline, with no data leakage
+``GET /api/premium/accuracy-report``
+                          post-draw accuracy: what the model said about each recent
+                          draw before it happened, position by position, against
+                          the digits that were actually drawn (Premium tier)
+``GET /api/me``            the caller's own account and subscription state
+``GET /api/checkout/plans`` the subscription price list (public)
+``POST /api/checkout/create-session``
+                          open a Stripe Checkout Session (card / PromptPay) for
+                          the token's own account. Produces a payable URL; it
+                          never charges and never grants.
+``POST /api/webhook/stripe``
+                          Stripe's server-to-server events. Signature-verified,
+                          idempotent, and the only code path that grants premium.
 
 Design notes
 ------------
@@ -34,9 +50,27 @@ Design notes
 * The service still boots when Supabase is unconfigured: ``/`` and
   ``/api/health`` keep working and ``/api/latest-draws`` answers ``503`` with a
   clear message, so a missing ``.env`` is visible rather than fatal.
-* This module currently exposes only public routes. The Day 2 plan also calls
-  for ``X-API-Key`` auth and ``slowapi`` rate limiting; those are not here yet
-  (see ROADMAP.md, Day 2).
+* **One endpoint is not public.** ``/api/predict/premium`` requires a Supabase
+  bearer token whose account holds an active premium subscription; the
+  entitlement logic is in ``auth.py`` and the table and its policies are in
+  ``schema_profiles.sql``. Every draw endpoint stays open on purpose — the free
+  tier is the product. This replaces the *client-side password* that used to
+  guard the premium panel, which was never a server-side control: the bundle
+  shipped the digest and the endpoint answered unauthenticated callers, so the
+  panel's only real protection was that nobody had bothered to look.
+* **The webhook is the market's only authority on who paid.** No endpoint here
+  can grant a subscription, and neither can the app: `create-session` returns
+  `charged: false` and `subscription_granted: false` even when it has just
+  created a real, payable Stripe session. Premium is written in exactly one
+  place — `webhook.py`, from a request whose Stripe signature verified — and the
+  database enforces the same rule from the other side, by refusing
+  `subscription_tier` to every non-service role (`schema_profiles.sql`).
+  So the two answers to "is this account premium" cannot disagree, because there
+  is only one writer.
+* The Day 2 plan also calls for ``X-API-Key`` auth and ``slowapi`` rate
+  limiting; those are still not here (see ROADMAP.md, Day 2). Rate limiting is
+  now the more pressing of the two: the premium endpoints are the first that
+  cost a database round trip before they can be refused.
 """
 
 from __future__ import annotations
@@ -57,10 +91,17 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).with_name(".env"))
 
-from fastapi import FastAPI, HTTPException, Query  # noqa: E402
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 from supabase import Client, create_client  # noqa: E402
 
+import accuracy  # noqa: E402
+import auth  # noqa: E402
+import backtest  # noqa: E402
+import checkout  # noqa: E402
+import payments  # noqa: E402
+import webhook  # noqa: E402
 from services import DEFAULT_WEIGHTS, analyse_draws  # noqa: E402
 
 # NOTE: `models` (and therefore statsmodels) is imported *inside* the advanced
@@ -166,6 +207,21 @@ logging.basicConfig(
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
 SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or "").strip()
 
+# A **second, more powerful** credential, used by exactly one endpoint: the Stripe
+# webhook (`webhook.py`). Everything else here reads the database with the caller's
+# own token so that row-level security decides what is visible; that is the whole
+# design of the premium gate. Granting a subscription cannot be done that way —
+# `schema_profiles.sql` deliberately denies `subscription_tier` to `authenticated`,
+# which is what stops a user pricing their own subscription at zero — so the
+# webhook needs a key that bypasses RLS.
+#
+# Treat it accordingly. It is a full-access admin credential for the whole
+# project: it must live only in the backend's environment, must never be prefixed
+# with EXPO_PUBLIC_ (which inlines a value into the app bundle for anyone to
+# read), and must never be committed. The single consumer is `webhook.py`, which
+# is also the only module allowed to decide an entitlement.
+SUPABASE_SERVICE_KEY = (os.getenv("SUPABASE_SERVICE_KEY") or "").strip()
+
 # Module-level singleton. None until the first successful initialisation.
 supabase_client: Client | None = None
 
@@ -210,6 +266,30 @@ def _credentials_problem() -> str | None:
         return (
             f"SUPABASE_URL is not a URL: {SUPABASE_URL!r}. It should look like "
             "https://<project-ref>.supabase.co"
+        )
+    return None
+
+
+def _service_key_problem() -> str | None:
+    """Why the webhook cannot write an entitlement, or None when it can.
+
+    Checked separately from `_credentials_problem` because it is a different
+    credential with a different failure: the API works fine without it right up
+    until the first customer pays, at which point the only symptom would be a
+    webhook that fails forever. Saying which variable is missing, at the moment
+    the webhook runs, is what turns that into a fixable message.
+    """
+    if not SUPABASE_SERVICE_KEY:
+        return (
+            "SUPABASE_SERVICE_KEY is not set, so a payment cannot be recorded. "
+            "This must be the Supabase *service_role* (or a secret) key, not the "
+            "anon key: the entitlement columns are not writable by any "
+            "signed-in role. Set it in backend/.env — see backend/.env.example."
+        )
+    if _looks_like_placeholder(SUPABASE_SERVICE_KEY):
+        return (
+            "SUPABASE_SERVICE_KEY still holds a placeholder, not a real key. Set "
+            "it in backend/.env to the project's service_role / secret key."
         )
     return None
 
@@ -391,6 +471,184 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# A note on the bearer header and CORS, since the premium endpoints depend on it:
+# `allow_headers=["*"]` is NOT emitted as a literal `*` by Starlette — it is a
+# mirror. Measured on Starlette 1.7.0, `preflight_response` copies whatever the
+# browser asked for in `Access-Control-Request-Headers` straight back into
+# `Access-Control-Allow-Headers` when `allow_all_headers` is set. So a preflight
+# naming `authorization` and `content-type` is granted both, including under the
+# beta's `CORS_ALLOW_CREDENTIALS=true` — where a literal `*` would be treated as a
+# header *name* rather than a wildcard, which is the usual way this breaks.
+# Verified rather than assumed because the failure mode is a browser CORS error
+# that looks nothing like the missing header it is.
+
+
+# ---------------------------------------------------------------------------
+# Where a payment is allowed to send the customer back to
+# ---------------------------------------------------------------------------
+# Stripe needs a `success_url` and a `cancel_url`, and those are the only part of
+# this integration that must name the frontend. They are built from an origin the
+# *server* trusts, never from a value the browser hands in unchecked, because a
+# client-supplied redirect target is an open redirect: an attacker mails a link
+# that takes real money and then lands the victim on a look-alike page they
+# control, complete with the same "payment successful" wording.
+#
+# The allow-list is deliberately the *same* one CORS already uses. Those are
+# exactly the origins this API is willing to be called from, so reusing them means
+# "can call the API" and "can be redirected to after paying" cannot drift apart,
+# and there is one thing to configure rather than two.
+
+#: FRONTEND_BASE_URL, if the operator set it. A bare origin: scheme, host, optional
+#: port — no path, query or fragment, which is what an `Origin` header carries.
+FRONTEND_BASE_URL = (os.getenv("FRONTEND_BASE_URL") or "").strip().rstrip("/")
+
+#: Loopback, in any of the spellings a dev server actually uses. Excluded from the
+#: open-redirect concern above on purpose: redirecting a browser to its own machine
+#: is not a phishing primitive — the attacker gains nothing by sending a victim to
+#: localhost — whereas refusing it would break `npx expo start` against a deployed
+#: API, which is the ordinary way this app is developed.
+_LOOPBACK_ORIGIN_RE = re.compile(
+    r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$", re.IGNORECASE
+)
+
+#: A bare origin and nothing else. Rejecting a path here rather than passing it to
+#: Stripe matters: Stripe appends its own query parameters to `success_url`, so a
+#: URL that already carried a query would silently lose or mangle them.
+_ORIGIN_SHAPE_RE = re.compile(r"^https?://[A-Za-z0-9.\-]+(:\d{1,5})?$")
+
+
+def _allowed_return_origins() -> tuple[str, ...]:
+    """The origins a payment may return to, most specific first."""
+    origins: list[str] = []
+    if FRONTEND_BASE_URL:
+        origins.append(FRONTEND_BASE_URL)
+    # A wildcard is not an allow-list, so it contributes nothing here.
+    origins.extend(origin for origin in CORS_ORIGINS if origin != "*")
+    return tuple(dict.fromkeys(origins))
+
+
+def _origin_is_allowed(origin: str) -> bool:
+    """Whether a payment may be returned to `origin`.
+
+    Mirrors precisely the set of origins the browser API already trusts:
+    the configured list, the preview-deployment regex (Cloudflare Pages gives
+    every preview its own hostname, so a list alone can never cover them), and
+    loopback.
+    """
+    if origin in _allowed_return_origins():
+        return True
+    if _LOOPBACK_ORIGIN_RE.match(origin):
+        return True
+    return bool(CORS_ORIGIN_REGEX and re.match(CORS_ORIGIN_REGEX, origin))
+
+
+#: The fallback used when neither `FRONTEND_BASE_URL` nor a non-wildcard
+#: `CORS_ORIGINS` says where the app is: the Expo web dev server's default port.
+#:
+#: This cannot be reached in a *working* production deployment, and that is the
+#: argument for having it rather than refusing with a 503. A browser can only call
+#: this API at all if the app's origin is allowed by CORS, so a deployment that
+#: serves the app must already name it in `CORS_ORIGINS` or `CORS_ORIGIN_REGEX` —
+#: which means the configured allow-list is non-empty. The only way to reach this
+#: constant is the wildcard dev configuration, where there is no wrong answer and
+#: refusing would break `curl` and the test suite for no benefit.
+#:
+#: The alternative — failing the request — was considered and rejected: the return
+#: URL decides where a browser lands *after* Stripe has taken the money, and the
+#: entitlement is granted by the webhook regardless. Refusing a real sale over a
+#: courtesy redirect would be the tail wagging the dog.
+DEFAULT_DEV_RETURN_ORIGIN = "http://localhost:8081"
+
+
+def resolve_return_origin(claimed: str | None) -> str:
+    """The origin to send the customer back to, or a refusal explaining why not.
+
+    ``claimed`` is the app's own origin — a browser knows it, and a native build
+    passes the web origin it wants the customer to land on. It is a *request*, not
+    a decision: anything outside the allow-list is refused with 403 rather than
+    quietly replaced with the default. Quietly replacing it would be invisible, and
+    the client bug that sent a wrong origin would stay hidden until it redirected a
+    paying customer somewhere unintended.
+    """
+    if claimed:
+        candidate = claimed.strip().rstrip("/")
+        if not _ORIGIN_SHAPE_RE.match(candidate):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"return_origin must be a bare origin such as "
+                    f"\"https://app.example.com\" — got {claimed!r}. Paths, "
+                    "queries and fragments are refused because Stripe appends its "
+                    "own parameters to the success URL."
+                ),
+            )
+        if not _origin_is_allowed(candidate):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"return_origin {candidate!r} is not an origin this API will "
+                    "send a payment back to. Add it to CORS_ORIGINS (or "
+                    "FRONTEND_BASE_URL) on the server."
+                ),
+            )
+        return candidate
+
+    allowed = _allowed_return_origins()
+    if allowed:
+        return allowed[0]
+
+    log.warning(
+        "No FRONTEND_BASE_URL and no non-wildcard CORS_ORIGINS: defaulting the "
+        "post-payment return to %s. Set FRONTEND_BASE_URL to the app's origin "
+        "before taking real payments.",
+        DEFAULT_DEV_RETURN_ORIGIN,
+    )
+    return DEFAULT_DEV_RETURN_ORIGIN
+
+
+# ---------------------------------------------------------------------------
+# Authentication — the dependency every gated endpoint shares
+# ---------------------------------------------------------------------------
+# Both dependencies live here rather than in `auth.py` because this module owns the
+# configuration they need: the Supabase URL, the key, and the one shared client.
+# `auth.py` is therefore pure logic over values it is handed, which is what makes
+# it testable without a server or a database.
+def require_user(
+    authorization: str | None = Header(
+        None,
+        alias="Authorization",
+        description=(
+            "Supabase access token, as `Bearer <token>`. This identifies the "
+            "account. The token is validated with Supabase Auth on every request; "
+            "the entitlement it produces is read from `user_profiles`."
+        ),
+    ),
+) -> auth.AuthenticatedUser:
+    """Resolve the caller, or refuse with 401.
+
+    Three steps, each of which can only produce a documented status: the header is
+    parsed (401), the token is validated (401), and the profile is read (401/503).
+    A caller whose token is fine but who has no subscription is **not** refused
+    here — that is `require_premium_user`'s decision, and separating them is what
+    lets `GET /api/me` answer for a free user.
+    """
+    token = auth.parse_bearer_token(authorization)
+    claims = auth.verify_access_token(get_supabase(), token)
+    profile = auth.read_profile(SUPABASE_URL, SUPABASE_KEY, token, str(claims["sub"]))
+    return auth.resolve_entitlement(claims, profile)
+
+
+def require_premium_user(
+    user: auth.AuthenticatedUser = Depends(require_user),
+) -> auth.AuthenticatedUser:
+    """Resolve the caller and require an active premium subscription.
+
+    Returns 403 for an account that never subscribed and 402 for one whose
+    subscription has lapsed, so the app can say "subscribe" or "renew" rather than
+    showing one message for both. See `auth.AuthenticatedUser.refusal_status`.
+    """
+    return auth.require_premium(user)
+
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -423,10 +681,48 @@ async def health() -> dict[str, Any]:
                 "basic": "/api/predict/basic",
                 "advanced": "/api/predict/advanced",
                 "premium": "/api/predict/premium",
+                "backtest": "/api/backtest",
             },
             # Advertised so a client can find out which ledgers exist without
             # guessing, and so the list lives in exactly one place (`LotteryType`).
             "lottery_types": [kind.value for kind in LotteryType],
+        },
+        # Reported so the app can tell "this backend does not have auth yet" from
+        # "my token was rejected", which look identical from a 401 and lead to
+        # opposite conclusions — the first means the deployment is stale, the
+        # second means the user must sign in again.
+        "auth": {
+            "status": "enforced",
+            "scheme": "bearer",
+            "profiles_table": auth.PROFILES_TABLE,
+            # Every endpoint behind the paywall, named in one place so a new one
+            # cannot be added without this list going stale — `tests/test_auth.py`
+            # asserts this equality rather than a membership, which is what makes
+            # that true.
+            "gated_endpoints": [
+                "/api/predict/premium",
+                "/api/premium/accuracy-report",
+            ],
+            "paid_tiers": [auth.PREMIUM_TIER],
+        },
+        # `gateway_configured` is the single field the app branches on to decide
+        # whether to offer a real purchase or the honest "not open yet" state. It
+        # is derived from the plan catalogue rather than hard-coded here, so
+        # wiring a provider cannot leave this reporting the wrong thing.
+        "checkout": {
+            "gateway_configured": checkout.provider_configured(),
+            "provider": checkout.provider_name(),
+            "currency": checkout.CURRENCY_THB,
+            "plans": [plan.id for plan in checkout.PLANS],
+            # Reported as configured/not_configured rather than as a boolean, to
+            # match the `supabase` field above. This is public and says only
+            # whether a server-side credential is present — never its value — but
+            # it is the difference between "payments are not set up at all" and
+            # "a payment would be taken and never recorded", which are worth being
+            # able to distinguish from outside the process.
+            "entitlement_writer": (
+                "configured" if _service_key_problem() is None else "not_configured"
+            ),
         },
     }
 
@@ -719,8 +1015,16 @@ async def predict_advanced(
 async def predict_premium(
     limit: int = HISTORY_LIMIT_QUERY,
     type: LotteryType = LOTTERY_TYPE_QUERY,
+    user: auth.AuthenticatedUser = Depends(require_premium_user),
 ) -> dict[str, Any]:
     """Premium tier: a per-position Bayesian model of a first prize.
+
+    **This endpoint requires an active premium subscription.** The caller must
+    send `Authorization: Bearer <supabase access token>`; the token is validated
+    against Supabase Auth and the account's `user_profiles` row is read through
+    RLS with that same token. No token is 401, an account that never subscribed is
+    403, and a lapsed subscription is 402 — see `auth.py` for why those are
+    distinguished. Every *draw* endpoint stays open; this is the one that is sold.
 
     ``type`` chooses the ledger (``thai`` by default, or ``laos`` / ``vietnam``),
     and everything below the fetch is unchanged: the same marginal-vs-conditional
@@ -800,12 +1104,522 @@ async def predict_premium(
     result["lottery_type"] = lottery_type
 
     log.info(
-        "predict/premium: status=%s type=%s draws=%d (limit=%d)",
+        "predict/premium: status=%s type=%s draws=%d (limit=%d) user=%s",
         result.get("status"),
         lottery_type,
         result.get("draws_analyzed", 0),
         limit,
+        user.user_id,
     )
+    return result
+
+
+@app.get(
+    "/api/premium/accuracy-report",
+    tags=["premium"],
+    summary="Post-draw accuracy: the model against the completed draws",
+    response_description=(
+        "For each of the most recent draws, the digits the positional model ranked "
+        "before that draw beside the digits actually drawn — per position, with the "
+        "actual digit's rank among the model's top three — plus the hit rate, "
+        "baseline and p-value for the positions and the two 2-digit channels"
+    ),
+)
+async def premium_accuracy_report(
+    type: LotteryType = LOTTERY_TYPE_QUERY,
+    draws: int = Query(
+        accuracy.DEFAULT_DRAWS,
+        ge=accuracy.MIN_DRAWS,
+        le=accuracy.MAX_DRAWS,
+        description=(
+            f"How many of the most recent draws to compare against what the model "
+            f"said about them ({accuracy.MIN_DRAWS}-{accuracy.MAX_DRAWS}, default "
+            f"{accuracy.DEFAULT_DRAWS}). Cost is roughly linear — about 70 ms per "
+            "draw — so the ceiling is a request budget rather than a statistical "
+            "one. The most recent draw is the first entry either way."
+        ),
+    ),
+    user: auth.AuthenticatedUser = Depends(require_premium_user),
+) -> dict[str, Any]:
+    """Premium tier: the model's own homework, marked against the real results.
+
+    **This endpoint requires an active premium subscription**, on the same terms as
+    `/api/predict/premium`: no token is 401, an account that never subscribed is
+    403, a lapsed subscription is 402.
+
+    One thing about this report has to be stated before any of its numbers are
+    read. **No prediction is stored anywhere in this service** — there is no
+    predictions table, and `services.py` ships the ranking's `delta` as `0.0` for
+    exactly that reason. So each comparison here is a **walk-forward replay**: the
+    model is handed only the draws strictly before the target draw (the slice in
+    `backtest.training_slice`, the same leakage boundary `tests/test_backtest.py`
+    verifies by spying on the rows the model receives) and asked what it would have
+    said, and that answer is then compared against the published result.
+
+    That is the honest way to mark the model's work, and it is *not* the same claim
+    as "this is what the AI predicted before the draw". The response says which one
+    it is in `prediction_basis`, `replay_notice` and `limitations`, because a
+    replayed prediction presented as a recorded one would be a fabricated claim
+    about the past. A genuine pre-draw record needs a snapshot written when the
+    prediction is made; `limitations` names that as the follow-up.
+
+    What is scored: every position of the first prize (six for Thailand and Laos,
+    five for Vietnam — the positions present are exactly the digits the prize has),
+    against a 10% uniform baseline; and the two 2-digit channels, exact and inside
+    the top five, against 1% and 5%. Every rate carries its baseline, its lift and
+    a one-sided binomial p-value, so a green hit cannot be read as skill on its own.
+    Insufficient data is a 200 with `status` set, never an error.
+    """
+    client = get_supabase()
+    lottery_type = type.value
+
+    try:
+        # The whole rolling window, not just `draws`: the targets are its tail and
+        # each one trains on the rows before it, so the window has to hold history
+        # *and* the draws under test. The fetch clamps anything larger.
+        rows = fetch_draw_history(client, MAX_HISTORY_LIMIT, type)
+    except Exception as exc:  # noqa: BLE001 - translated into an HTTP response
+        log.exception("Draw history query failed (accuracy, type=%s).", lottery_type)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Failed to fetch {lottery_type} draw history from '{DRAWS_TABLE}': {exc}"
+            ),
+        ) from exc
+
+    try:
+        result = accuracy.build_report(
+            rows,
+            lottery_type=lottery_type,
+            draws=draws,
+            train_window=MAX_HISTORY_LIMIT,
+            prize_digits=LOTTERY_PRIZE_DIGITS[type],
+        )
+    except Exception as exc:  # noqa: BLE001 - a model bug must not look like bad input
+        log.exception("Accuracy report failed after fetching %d row(s).", len(rows))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to build the accuracy report: {exc}",
+        ) from exc
+
+    log.info(
+        "premium/accuracy-report: status=%s type=%s compared=%d/%d user=%s",
+        result.get("status"),
+        lottery_type,
+        result.get("draws_evaluated", 0),
+        draws,
+        user.user_id,
+    )
+    return result
+
+
+@app.get(
+    "/api/backtest",
+    tags=["predict"],
+    summary="Walk-forward backtest of the recent draws",
+    response_description=(
+        "AI win rate, ROI and every baseline (uniform, simulated random, break-even) "
+        "for the 2-digit channels, plus the premium positional model's out-of-sample "
+        "accuracy, each with a p-value against chance"
+    ),
+)
+async def backtest_endpoint(
+    type: LotteryType = LOTTERY_TYPE_QUERY,
+    draws: int = Query(
+        backtest.DEFAULT_DRAWS,
+        ge=backtest.MIN_DRAWS,
+        le=backtest.MAX_DRAWS,
+        description=(
+            f"How many of the most recent draws to replay as if they had not happened "
+            f"yet ({backtest.MIN_DRAWS}-{backtest.MAX_DRAWS}, default "
+            f"{backtest.DEFAULT_DRAWS}). Cost is roughly linear: at 60 draws this "
+            "endpoint spends about five seconds computing, which is the ceiling "
+            "because it is a request budget rather than a statistical one."
+        ),
+    ),
+    payout_multiple: float | None = Query(
+        None,
+        gt=0,
+        le=1000,
+        description=(
+            "Units returned per unit staked on a winning 2-digit pick, used for the "
+            "ROI. Omit to use the ledger's documented default: 25 for Thailand (an "
+            "฿80 ticket paying a ฿2,000 เลขท้าย 2 ตัว prize) and fair odds (100) for "
+            "Laos and Vietnam, where no sourced payout exists here. Pass one value "
+            "to compare all three ledgers on the same footing."
+        ),
+    ),
+) -> dict[str, Any]:
+    """Replay recent draws through the models using only their own past.
+
+    For each replayed draw the models are trained on the draws strictly before it —
+    see ``backtest.LEAKAGE_GUARD`` for the exact slice, which
+    ``tests/test_backtest.py`` verifies by spying on the rows the model is handed.
+
+    What is measured, and what is not:
+
+    * the **2-digit channels** (``top``, ``bottom``) via the Frequency + Markov
+      ensemble behind ``/api/predict/basic`` — win rate, ROI and the baselines;
+    * the **premium positional model** via ``models.bayesian`` — a per-position
+      out-of-sample hit rate, which is the claim the premium tier is sold on;
+    * **not** the ARIMA/Monte Carlo ensemble. One walk-forward step through it costs
+      a measured 8.28 s, so a 30-draw replay would take about four minutes per
+      request. The payload says so in ``models_excluded`` rather than quietly
+      dropping it.
+
+    ``draws`` is a *request* budget, not a promise: a ledger with less history
+    evaluates what it has, reports ``draws_evaluated``, and lists the shortfall in
+    ``warnings``. Insufficient data is never an error here either — an empty ledger
+    returns HTTP 200 with ``status`` set, exactly as the prediction endpoints do.
+    """
+    client = get_supabase()
+    lottery_type = type.value
+
+    try:
+        # The whole rolling window, not just `draws`: the targets are its tail and
+        # each step trains on the rows before its own target, so the window has to
+        # be deep enough to contain history *and* the draws under test. Asking for
+        # more than this is pointless — the fetch clamps it — and asking for less
+        # would starve the earliest steps of training data.
+        rows = fetch_draw_history(client, MAX_HISTORY_LIMIT, type)
+    except Exception as exc:  # noqa: BLE001 - translated into an HTTP response
+        log.exception("Draw history query failed (backtest, type=%s).", lottery_type)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Failed to fetch {lottery_type} draw history from '{DRAWS_TABLE}': {exc}"
+            ),
+        ) from exc
+
+    try:
+        result = backtest.run_backtest(
+            rows,
+            lottery_type=lottery_type,
+            draws=draws,
+            train_window=MAX_HISTORY_LIMIT,
+            prize_digits=LOTTERY_PRIZE_DIGITS[type],
+            payout_multiple=payout_multiple,
+        )
+    except Exception as exc:  # noqa: BLE001 - a model bug must not look like bad input
+        log.exception("Backtest failed after fetching %d row(s).", len(rows))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to compute the backtest: {exc}",
+        ) from exc
+
+    log.info(
+        "backtest: status=%s type=%s evaluated=%d/%d train=%d-%d",
+        result.get("status"),
+        lottery_type,
+        result.get("draws_evaluated", 0),
+        draws,
+        (result.get("train_sizes") or {}).get("min", 0),
+        (result.get("train_sizes") or {}).get("max", 0),
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Account — what the signed-in caller is entitled to
+# ---------------------------------------------------------------------------
+@app.get(
+    "/api/me",
+    tags=["account"],
+    summary="The caller's account and subscription state",
+    response_description=(
+        "The verified user id, the subscription tier and its expiry, and whether "
+        "the positional analysis is currently unlocked for this account"
+    ),
+)
+async def me(
+    response: Response,
+    user: auth.AuthenticatedUser = Depends(require_user),
+) -> dict[str, Any]:
+    """Report the caller's own entitlement.
+
+    This exists because the client has to answer one question after a successful
+    sign-in — *is this account premium, and until when?* — and without this
+    endpoint its only way to find out would be to call a premium endpoint and read
+    the status code of a failure. That works, but it makes "am I subscribed" a
+    property of an error path, which then has to be kept in step with the gate.
+    Answering it directly is less code and cannot disagree with the gate, because
+    both go through `auth.resolve_entitlement`.
+
+    **Personalized, so it must never be cached**: `Cache-Control: private, no-store`
+    is set explicitly. A shared cache holding this response would hand one user's
+    subscription state to the next caller of the same URL.
+
+    Signed out is a 401 rather than an "authenticated: false" body, so the client
+    has exactly one way to learn that a token is missing or dead.
+    """
+    response.headers["Cache-Control"] = "private, no-store"
+
+    log.info(
+        "me: user=%s tier=%s premium=%s profile_missing=%s",
+        user.user_id,
+        user.tier,
+        user.is_premium(),
+        user.profile_missing,
+    )
+    return user.as_payload()
+
+
+# ---------------------------------------------------------------------------
+# Checkout — the price list, and a session endpoint that sells nothing yet
+# ---------------------------------------------------------------------------
+@app.get(
+    "/api/checkout/plans",
+    tags=["checkout"],
+    summary="The subscription price list",
+    response_description=(
+        "Plan ids, integer amounts in the currency's minor unit, intervals, and "
+        "whether a payment gateway is connected yet"
+    ),
+)
+async def checkout_plans() -> dict[str, Any]:
+    """The catalogue. Public — prices are not a secret, and a signed-out user is
+    exactly who needs to read them before deciding to create an account.
+
+    Amounts are integers in the minor unit (9900 = ฿99.00). The server owns the
+    price list so the number the user is shown and the number they would be
+    charged cannot drift apart.
+    """
+    return checkout.plans_payload()
+
+
+class CheckoutSessionRequest(BaseModel):
+    """Body of a checkout request.
+
+    A model rather than `dict[str, Any]` so the field names and the plan id land in
+    the OpenAPI schema, and so a missing `plan` is a 422 FastAPI raises before the
+    handler runs rather than a `KeyError` inside it.
+    """
+
+    plan: str = Field(
+        ...,
+        description=(
+            "Which plan to buy. One of the ids from `GET /api/checkout/plans` "
+            f"({', '.join(plan.id for plan in checkout.PLANS)})."
+        ),
+    )
+    user_id: str | None = Field(
+        None,
+        description=(
+            "Optional, and **not** used to choose the account: the user id always "
+            "comes from the verified bearer token. If this is supplied it must "
+            "match that id, so a client that has drifted out of step is told "
+            "rather than charged for the wrong account."
+        ),
+    )
+    return_origin: str | None = Field(
+        None,
+        description=(
+            "Optional bare origin to send the customer back to after paying, "
+            "e.g. `https://superheng-3yf.pages.dev`. Validated against the "
+            "server's own allow-list — it is never used unchecked, because a "
+            "client-chosen redirect target is an open redirect."
+        ),
+    )
+    idempotency_key: str | None = Field(
+        None,
+        min_length=8,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        description=(
+            "Optional. Send the *same* value again to retry a request safely. If "
+            "a call times out after Stripe created the session, retrying with the "
+            "same key returns that same session rather than creating a second "
+            "payable one. Generate a new key for a new purchase — two taps are two "
+            "intents. Values outside `[A-Za-z0-9_-]` are refused rather than "
+            "forwarded, so a malformed key cannot smuggle anything into the "
+            "gateway request."
+        ),
+    )
+
+
+@app.post(
+    "/api/checkout/create-session",
+    tags=["checkout"],
+    summary="Open a Stripe Checkout Session (card / PromptPay)",
+    response_description=(
+        "A `status` of `created` with a `checkout_url` to send the customer to, or "
+        "`not_implemented` when no gateway is configured. `charged` and "
+        "`subscription_granted` are **always** false — creating a session takes no "
+        "money and grants nothing."
+    ),
+)
+async def create_checkout_session(
+    body: CheckoutSessionRequest,
+    response: Response,
+    user: auth.AuthenticatedUser = Depends(require_user),
+) -> dict[str, Any]:
+    """Start a purchase. **Nothing is charged and nothing is granted.**
+
+    Two possible outcomes, and the client should branch on `status`:
+
+    * ``created`` — a real, payable Stripe session. `checkout_url` is where to send
+      the customer. No money has moved: they still have to complete the payment on
+      Stripe's page, and access is granted by the webhook when Stripe confirms, not
+      by returning to the app.
+    * ``not_implemented`` — no gateway is configured on this server. The response
+      describes the session that would have been created and says so plainly. An
+      HTTP 200 rather than 501, so "not open yet" does not arrive in the client as
+      an error; see `checkout.py`.
+
+    `charged` and `subscription_granted` are false in both cases. That is the
+    invariant a test can hold this endpoint to, and it is what makes a client bug
+    unable to show a success screen for a purchase that did not happen.
+
+    Authenticated but not premium-gated: an account with no subscription yet is
+    precisely the account that should be able to start one. The id used for the
+    session comes from the token, never from the body — see
+    `CheckoutSessionRequest.user_id`.
+    """
+    response.headers["Cache-Control"] = "private, no-store"
+
+    plan = checkout.PLANS_BY_ID.get(body.plan)
+    if plan is None:
+        # 422 to match how FastAPI reports an unprocessable value elsewhere, and
+        # the message lists the ids so a client is told what to send instead.
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown plan {body.plan!r}. Known plans: "
+                f"{', '.join(plan.id for plan in checkout.PLANS)}."
+            ),
+        )
+
+    if body.user_id is not None and body.user_id != user.user_id:
+        # Refused rather than ignored. Ignoring it would let a client bug — one
+        # account sending another's id — pass silently here and become a mis-billed
+        # charge.
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "The `user_id` in the body does not match the account this token "
+                "belongs to. A checkout can only be opened for the token's own "
+                "account."
+            ),
+        )
+
+    # Resolved before the gateway is touched, so a bad redirect target is refused
+    # without creating a session nobody can be sent back from.
+    return_origin = resolve_return_origin(body.return_origin)
+
+    try:
+        session = checkout.create_session(
+            user,
+            plan,
+            return_origin=return_origin,
+            claimed_user_id=body.user_id,
+            idempotency_key=body.idempotency_key,
+        )
+    except payments.PaymentError as exc:
+        # `PaymentError` carries the status and a sentence written for the caller.
+        # The gateway's own failure detail is logged inside `payments.py`; what
+        # reaches the client names what it can act on and never quotes a credential.
+        log.error(
+            "checkout/create-session failed: user=%s plan=%s status=%s detail=%s",
+            user.user_id,
+            plan.id,
+            exc.status_code,
+            exc.detail,
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    log.info(
+        "checkout/create-session: user=%s plan=%s status=%s provider=%s charged=%s",
+        user.user_id,
+        plan.id,
+        session["status"],
+        session["provider"],
+        session["charged"],
+    )
+    return session
+
+
+# ---------------------------------------------------------------------------
+# Stripe webhook — the only code path in the project that grants premium
+# ---------------------------------------------------------------------------
+@app.post(
+    "/api/webhook/stripe",
+    tags=["checkout"],
+    summary="Stripe server-to-server events (signature-verified)",
+    response_description=(
+        "What the event did: `applied` (the entitlement was written), `duplicate` "
+        "(already processed), or `recorded` (arrived, granted nothing)"
+    ),
+)
+async def stripe_webhook(request: Request) -> dict[str, Any]:
+    """Receive Stripe's events and act on the ones that grant an entitlement.
+
+    **This endpoint is authenticated by a signature, not by a token.** Stripe is a
+    server and cannot hold a session, so there is no bearer header to require;
+    `Stripe-Signature` over the request body is the authentication, and it is the
+    only thing standing between the internet and the one function that writes
+    `subscription_tier`. Hence the order of operations below, which is deliberate:
+
+    1. **Read the raw body and nothing else.** The signature covers the exact bytes
+       Stripe sent. Parsing the JSON first — with a Pydantic model or
+       `request.json()` — changes whitespace and key order, and every genuine event
+       would then fail verification. This is the single most common way a webhook
+       integration is written wrong.
+    2. **Refuse to guess when unconfigured.** Without a signing secret nothing can
+       be verified, so this answers 503 rather than accepting anything.
+    3. **Verify before trusting a field.** Everything the handler acts on comes from
+       the verified event: the account from `client_reference_id`, the period from
+       the catalogue rather than from the event.
+    4. **Deduplicate durably.** Stripe retries a failed delivery for up to three
+       days, and can deliver the same event twice even when nothing failed. The
+       idempotency is the primary key of `payment_events`, applied inside the same
+       transaction as the grant — not a set in memory that dies with the process.
+
+    A non-2xx makes Stripe retry, which is exactly what should happen when the
+    database is unreachable: the payment is real and the grant must eventually
+    land. A 400 is returned for a bad signature, and Stripe does not retry those.
+    """
+    # Both halves of what this endpoint needs, checked before any work is done so
+    # the failure names the actual missing variable. Note what is *not* checked:
+    # the Stripe API key. Verifying a delivery needs the signing secret, not the
+    # credential used to create sessions — see `payments.missing_verification_
+    # configuration`, which explains why letting the entitlement path depend on the
+    # charging path's key would be a mistake.
+    verification_problem = payments.missing_verification_configuration()
+    if verification_problem is not None:
+        log.error("Stripe webhook called but it cannot be verified: %s", verification_problem)
+        raise HTTPException(
+            status_code=503,
+            detail="This deployment cannot verify Stripe webhooks yet. " + verification_problem,
+        )
+
+    service_key_problem = _service_key_problem()
+    if service_key_problem is not None:
+        # 503 rather than 401: the request is authentic, this server just cannot
+        # act on it. Stripe retries, so the grant lands once the key is set — which
+        # is the whole reason not to acknowledge the event here.
+        log.error("Stripe webhook cannot record the payment: %s", service_key_problem)
+        raise HTTPException(status_code=503, detail=service_key_problem)
+
+    # The raw bytes, untouched. See point 1 above.
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature")
+
+    try:
+        result = webhook.handle(
+            payload,
+            signature,
+            base_url=SUPABASE_URL,
+            service_key=SUPABASE_SERVICE_KEY,
+        )
+    except payments.PaymentError as exc:
+        # A bad signature or a malformed body: 400, and Stripe does not retry.
+        log.warning("Rejected a Stripe webhook: %s", exc.detail)
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except webhook.WebhookProblem as exc:
+        # A database failure: 503, so Stripe retries and the grant lands later.
+        log.error("Stripe webhook could not be recorded: %s", exc.detail)
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
     return result
 
 

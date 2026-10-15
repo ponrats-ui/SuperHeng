@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import grant_premium
 from models.bayesian import POSITION_NAMES, analyse_positions
 from scripts import scrape_international as intl
 from scripts.scrape_international import (
@@ -487,6 +488,9 @@ def test_the_endpoint_asks_for_five_positions_under_the_vietnam_ledger(
         "fetch_draw_history",
         lambda _client, _limit, _kind: vietnam_ledger(120),
     )
+    # The endpoint is behind an entitlement check now; this test is about which
+    # positions a five-digit prize produces, not about who may read them.
+    grant_premium()
     client = TestClient(main.app)
 
     payload = client.get("/api/predict/premium", params={"type": "vietnam"}).json()

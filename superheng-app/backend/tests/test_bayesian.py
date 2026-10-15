@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+from conftest import grant_premium
 from models.bayesian import (
     DEFAULT_MIN_SUPPORT,
     POSITION_NAMES,
@@ -362,7 +363,10 @@ def test_a_ledger_below_the_floor_publishes_no_picks():
 
 
 @pytest.fixture()
-def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client(monkeypatch: pytest.MonkeyPatch, premium_account) -> TestClient:
+    # `premium_account` is required by the suite, not by the model: the endpoint is
+    # behind an entitlement check now, and everything below is about the maths.
+    # See backend/conftest.py for what the override does and does not replace.
     monkeypatch.setattr(main, "get_supabase", lambda: object())
     monkeypatch.setattr(
         main,
@@ -373,7 +377,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 @pytest.fixture()
-def empty_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def empty_client(monkeypatch: pytest.MonkeyPatch, premium_account) -> TestClient:
     monkeypatch.setattr(main, "get_supabase", lambda: object())
     monkeypatch.setattr(
         main,
@@ -446,6 +450,10 @@ def test_a_model_failure_becomes_a_500_with_detail(monkeypatch: pytest.MonkeyPat
         lambda _client, limit, _type=main.LotteryType.thai: ledger_rows(limit),
     )
 
+    # Signed in, so the 500 below is provably the *model* failing and not the
+    # entitlement check refusing the caller — the two must not be confusable.
+    grant_premium()
+
     def explode(*_args, **_kwargs):
         raise RuntimeError("positional model exploded")
 
@@ -470,6 +478,7 @@ def test_a_database_failure_becomes_a_500_with_detail(monkeypatch: pytest.Monkey
         raise RuntimeError("PGRST205 could not find the table")
 
     monkeypatch.setattr(main, "fetch_draw_history", explode)
+    grant_premium()
     response = TestClient(main.app, raise_server_exceptions=False).get(
         "/api/predict/premium", params={"limit": 120}
     )

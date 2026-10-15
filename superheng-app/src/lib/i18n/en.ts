@@ -44,11 +44,13 @@ export const en = {
   'nav.myNumber': 'My Number',
   'nav.insights': 'Insights',
   'nav.performance': 'Performance',
+  'nav.backtest': 'Backtest',
 
   'header.dashboardSubtitle': 'Probability intelligence',
   'header.insightsSubtitle': 'Deep insights',
   'header.myNumberSubtitle': 'Analyse any number',
   'header.performanceSubtitle': 'Performance & transparency',
+  'header.backtestSubtitle': 'Proven, not promised',
   'header.gridBadge': '00–99 GRID',
 
   // ---------------------------------------------------------------------------
@@ -154,7 +156,7 @@ export const en = {
   'premium.subtitle': 'Bayesian positional model · 1st prize',
   'premium.modePill': '✨ PREMIUM MODE',
   'premium.loginPill': '🔒 PREMIUM LOGIN',
-  'premium.unlockHint': 'Open the Premium sign-in form (password required)',
+  'premium.unlockHint': 'Open the Premium sign-in form',
   'premium.analysisLoading': 'Loading the per-position analysis…',
   'premium.analysisWaking':
     'Waking the server… (it sleeps on a free instance and can take up to a minute)',
@@ -165,18 +167,107 @@ export const en = {
   'premium.downloading': 'Downloading…',
   'premium.railTitle': 'Premium',
   'premium.railSubtitle': 'Sign in to open the positional model',
-  'premium.username': 'Username',
-  'premium.password': 'Password',
-  'premium.signIn': 'Sign in',
-  'premium.signOut': '🔒 Lock Premium mode',
+  'premium.signOut': 'Sign out',
   'premium.accessTitle': 'Premium Access',
   'premium.accessSubtitle':
-    'Beta test of Premium mode — sign in to see the per-position analysis',
+    'Sign in to subscribe, or to open the analysis you already pay for.',
+
+  // --- Accounts (replaces the client-side password gate) -------------------
+  'premium.modeSignIn': 'Sign in',
+  'premium.modeRegister': 'Sign up',
+  'premium.email': 'Email',
+  'premium.newPassword': 'Password',
+  // Stated up front rather than shown as a validation failure after submitting:
+  // this is Supabase's default minimum and the only rule the user has to satisfy.
+  'premium.passwordHint': 'At least 6 characters.',
+  'premium.checkEmail':
+    'Account created. Check your inbox to confirm the address, then sign in.',
+  'premium.signedInAs': 'Signed in as {email}',
+  'premium.activeUntil': 'active until {date}',
+
+  // --- Subscription state -------------------------------------------------
+  // "Expired" and "never subscribed" are different asks — renew versus subscribe —
+  // so they get different words rather than one vague "not available".
+  'premium.noSubscriptionTitle': 'No active subscription',
+  'premium.noSubscriptionBody':
+    'This account is signed in but has no active Premium subscription. The positional ' +
+    'analysis stays locked until it does.',
+  'premium.lapsedTitle': 'Subscription expired',
+  'premium.lapsedBody':
+    'This account\u2019s Premium subscription has ended. Renew it to reopen the ' +
+    'positional analysis.',
+  'premium.planTitle': 'Choose a plan',
+  'premium.perMonth': 'month',
+  'premium.perYear': 'year',
+  'premium.checkout': 'Upgrade',
+  'premium.checkoutFor': '{plan} — {price}',
+  'premium.checkoutMethods': 'Card or PromptPay',
+  // The Premium card's single upgrade button. It opens the paywall at `/premium`,
+  // which holds the plan, the payment methods and Stripe's return URL — so the label
+  // names what can actually be paid with, and the shorter fallback applies when no
+  // gateway is connected and there is nothing to name.
+  'premium.upgradeCta': 'Upgrade to Premium (Card / PromptPay)',
+  'premium.upgradeCtaComingSoon': 'Upgrade to Premium',
+  'premium.checkoutUnavailable':
+    'Payments are not open yet. Nothing was charged and no subscription was started — ' +
+    'the button is wired to the real endpoint and will work as soon as a payment ' +
+    'provider is connected.',
+  'premium.checkoutCharged':
+    'The payment provider accepted this checkout. Your subscription will appear here ' +
+    'as soon as the confirmation reaches the server.',
+  'premium.checkoutOpening': 'Opening Stripe\u2019s secure payment page\u2026',
+  'premium.checkoutCreated':
+    'Opening Stripe\u2019s secure payment page. Nothing has been charged yet \u2014 your ' +
+    'subscription starts when Stripe confirms the payment, not when you come back here.',
+  'premium.checkoutRedirectFailed':
+    'Stripe created a payment page but this device would not open it. Nothing was ' +
+    'charged \u2014 if a popup blocker is on, allow this site and try again.',
+  'premium.alreadyPremium': 'This account already has an active Premium subscription.',
+  'premium.accountUnreadable':
+    'Signed in, but the subscription could not be checked just now. This is a service ' +
+    'problem, not a verdict about your account.',
+  'premium.profileMissing':
+    'No profile row exists for this account yet, so no subscription can be attached to ' +
+    'it. An administrator needs to apply backend/schema_profiles.sql.',
+  'premium.refusedHint':
+    'The server refused this request. Sign in below, or subscribe if you have not — '
+    + 'asking again will not change the answer.',
+  'premium.notConfiguredTitle': 'Accounts are not set up on this build',
+  'premium.notConfiguredBody':
+    'This build has no Supabase configuration, so signing in is not possible here. The ' +
+    'free dashboard, the ledger and the backtest are unaffected.',
+
+  // --- Sign-in failures ---------------------------------------------------
+  // Supabase reports these as English sentences meant for developers; they are
+  // mapped to codes in lib/auth.tsx and translated here so a Thai UI stays Thai.
+  'premium.authError.unconfigured': 'This build has no account configuration.',
+  'premium.authError.invalidCredentials': 'That email or password is not right.',
+  'premium.authError.emailNotConfirmed':
+    'That address has not been confirmed yet. Check your inbox for the confirmation ' +
+    'link.',
+  'premium.authError.alreadyRegistered':
+    'There is already an account for that address. Sign in instead.',
+  'premium.authError.weakPassword':
+    'That password is too short — use at least 6 characters.',
+  'premium.authError.rateLimited':
+    'Too many attempts just now. Wait a moment and try again.',
+  'premium.authError.invalidEmail': 'Enter a valid email address and a password.',
+  'premium.authError.network':
+    'Could not reach the account service. Check your connection and try again.',
+  'premium.authError.unknown': 'Sign-in failed.',
+  // The value proposition on the locked card, above the password field. Four
+  // checkmarked lines rather than a paragraph: this is the only place the reader
+  // decides whether the door is worth opening, and a bulleted list is scannable
+  // where prose is not.
+  'premium.valueTitle': 'Why unlock Premium',
+  'premium.valueMarkets': 'Unlock 3 Markets: Thai, Lao, & Hanoi',
+  'premium.valueModels': 'Deep Analysis with 4 Advanced AI Models',
+  'premium.valuePositions': 'Exact Positional Probability',
+  'premium.valueRealtime': 'Real-time Data & Trend Updates',
   'premium.lockedPill': '🔒 PREMIUM',
-  'premium.wrongCredentials': 'That username or password is not right.',
   'premium.gateNote':
-    'The beta door for the Premium panel — not account security. The numbers are served ' +
-    'by a public endpoint, so treat them as public.',
+    'Your account is used only to check the subscription. The dashboard, the ledger and ' +
+    'the backtest stay free and need no account at all.',
   'premium.lockedTitle': 'Locked',
   'premium.lockedCta': 'Unlock to see the analysis',
   'premium.unlockWithPremium': '{title} — unlock with Premium',
@@ -196,6 +287,53 @@ export const en = {
   'premium.positionTens': 'Tens',
   'premium.positionUnits': 'Units',
   'premium.vsMarginal': 'x{lift} vs marginal · {count}/{support}',
+
+  // --- Latest-draw accuracy (ตรวจการบ้าน AI) ---------------------------------
+  // The two faces of the premium panel's view switcher. Short, because they sit in a
+  // pill beside a country switcher that uses the same control.
+  'premium.viewAnalysis': 'Analysis',
+  'premium.viewAccuracy': 'Latest accuracy',
+  // The switcher's own label, for screen readers. The visible faces are the two
+  // above; a pill row with no label is a tablist nobody can name.
+  'premium.viewFilter': 'Analysis or latest-draw accuracy',
+  'premium.accuracy.title': 'Latest draw accuracy',
+  'premium.accuracy.subtitle':
+    'The model\u2019s picks for each completed draw, beside the numbers that were ' +
+    'actually drawn.',
+  // Stated before the numbers, not after them. The service stores no prediction, so
+  // everything below is a reconstruction — the one thing this card must not imply is
+  // that it is a forecast that was made at the time.
+  'premium.accuracy.replayTitle': 'Replayed, not recorded',
+  'premium.accuracy.replayBody':
+    'No prediction is stored when one is made, so the model was re-run for each draw ' +
+    'using only the draws before it. That reproduces what it would have said — it is ' +
+    'not proof that it was run at the time.',
+  'premium.accuracy.loading': 'Loading the accuracy report…',
+  'premium.accuracy.loadFailed': 'Could not load the accuracy report',
+  'premium.accuracy.empty':
+    'No draw has enough history behind it to rebuild a prediction yet.',
+  'premium.accuracy.latestDraw': 'Latest draw',
+  'premium.accuracy.aiPredicted': 'AI predicted',
+  'premium.accuracy.actualResult': 'Actual result',
+  'premium.accuracy.hit': 'HIT',
+  'premium.accuracy.miss': 'MISS',
+  'premium.accuracy.nearMiss': 'IN TOP 3',
+  'premium.accuracy.rankOf': 'ranked #{rank}',
+  'premium.accuracy.positionsHit': '{hits}/{total} positions',
+  'premium.accuracy.trainedOn': 'trained on {count} draws',
+  'premium.accuracy.overWindow': 'Over the last {draws} draws',
+  'premium.accuracy.hitRate': '{rate} hit rate vs {baseline} baseline',
+  'premium.accuracy.pValue': 'p = {p}',
+  'premium.accuracy.significant': 'Better than chance in this sample',
+  'premium.accuracy.notSignificant':
+    'Not distinguishable from chance at this sample size',
+  'premium.accuracy.channels': '2-digit prizes',
+  'premium.accuracy.channelTop': 'Top · last 2 of the 1st prize',
+  'premium.accuracy.channelBottom': 'Bottom · the 2-digit prize',
+  'premium.accuracy.exact': 'Exact',
+  'premium.accuracy.inTop5': 'In top 5',
+  'premium.accuracy.recentDraws': 'Draws compared',
+  'premium.accuracy.limitsTitle': 'What this cannot show',
   'premium.metaRow': '{count} draws · latest {prize} ({date})',
   'premium.thinRowPillHint':
     'The conditioning state for this position has too few past draws, so it fell back ' +
@@ -213,22 +351,193 @@ export const en = {
     'Deep analysis of the 3-digit sets and of all six digits of the 1st prize, from ' +
     'the high-tier AI models.',
   'paywall.comingSoonPill': '🔒 COMING SOON',
-  'paywall.comingSoon': 'This tier is opening soon.',
+  // Shown instead of "coming soon" once a gateway is connected, so the pill states
+  // what can actually be used rather than what is missing.
+  'paywall.livePill': 'CARD · PROMPTPAY',
+  // The way in, on this screen. The paywall carries the same form as the Premium
+  // card, so a customer Stripe sends back here can sign in without leaving it —
+  // which is what the old "sign in on the dashboard first" wording could not do.
+  'paywall.authTitle': 'Sign in or create an account',
+  'paywall.authBody':
+    'Subscriptions are tied to an account. Sign in, or create one — the price and the '
+    + 'payment methods are the same either way.',
+  // The paywall's upgrade button calls the real checkout endpoint. These are the
+  // states that replace "coming soon" when it cannot complete.
+  'paywall.signInRequired':
+    'Sign in or create an account above first — then this button opens a checkout.',
+  'paywall.checkoutUnavailable':
+    'Payments are not open yet, so nothing was charged and no subscription started. '
+    + 'The dashboard\u2019s Premium card shows the full status.',
+  'paywall.checkoutFailed':
+    'The checkout could not be started. Nothing was charged — try again in a moment.',
+  'paywall.checkoutRedirectFailed':
+    'Stripe created a payment page but this device would not open it. Nothing was '
+    + 'charged — if a popup blocker is on, allow this site and try again.',
+  // Shown after Stripe sends the customer back. The redirect proves nothing: the
+  // entitlement is written by the webhook, which can land a moment later, so the
+  // wording is "confirming" rather than "confirmed".
+  'paywall.paymentReturning':
+    'Stripe is confirming your payment. This page updates on its own — it usually '
+    + 'takes a few seconds.',
+  'paywall.paymentCancelled': 'Payment cancelled. Nothing was charged.',
+  'paywall.methodsTitle': 'PAY WITH',
+  'paywall.methodsCard': 'Credit or debit card — Visa, Mastercard, JCB, Amex',
+  'paywall.methodsPromptPay': 'PromptPay QR — scan with any Thai banking app',
   'paywall.benefitsTitle': 'WHAT YOU GET',
   'paywall.benefit1': '3-digit sets — rankings and Heng score for every position',
   'paywall.benefit2': '6-digit 1st prize — opens when the high-tier models are ready',
   'paywall.benefit3': 'The full historical analysis, unlimited viewing',
   'paywall.price': '฿99/month',
-  'paywall.priceSub': 'Cancel anytime · pay by credit card',
-  'paywall.subscribe': 'Subscribe now',
-  'paywall.subscribeHint': 'Subscribe now (the tier is not open yet)',
+  // "Cancel anytime" was wrong: this is a one-time payment for a 30-day pass, not a
+  // recurring subscription, so there is nothing to cancel. Copy has to match what
+  // the gateway will actually do (Stripe is called with mode=payment).
+  'paywall.priceSub': 'One-time payment · 30 days of access',
+  'paywall.subscribe': 'Upgrade with card or PromptPay',
+  'paywall.subscribeHint': 'Upgrade with a credit card or PromptPay',
+  // Used while no gateway is connected, so the button does not name payment
+  // methods this build has nothing to offer them with. The methods block below is
+  // hidden in the same state, for the same reason.
+  'paywall.subscribeComingSoon': 'Subscribe',
+  'paywall.subscribeComingSoonHint': 'Subscribe (the tier is not open yet)',
   'paywall.noCharge':
-    'Nothing is charged at the moment — tapping subscribe will not bill you.',
+    'Nothing is charged until you complete the payment on Stripe\u2019s secure page.',
+  'paywall.noChargeComingSoon':
+    'Nothing is charged at the moment \u2014 tapping subscribe will not bill you.',
   'paywall.dismiss': 'Not now — back to the dashboard',
   'paywall.dismissHint': 'Back',
   'paywall.disclaimer':
     'Every analysis is a statistical estimate from historical draw data. No model can ' +
     'guarantee a prize.',
+
+  // ---------------------------------------------------------------------------
+  // Backtest
+  // ---------------------------------------------------------------------------
+  // This panel exists to be *believed*, so the wording never rounds an
+  // inconclusive result up to a win: `backtest.noEdge` says the edge is unproven
+  // rather than absent, and the two verdict bodies state the limit of what a
+  // finite sample can show. A baseline is named beside every rate for the same
+  // reason — a hit rate on its own is the claim this screen refuses to make.
+  'backtest.title': 'Backtest',
+  'backtest.subtitle': 'Every model replayed on draws it had never seen',
+  'backtest.windowDraws': 'Last {count}',
+  'backtest.loading': 'Replaying the last {count} draws — each one against its own past…',
+  'backtest.waking':
+    'Waking the server… (it sleeps on a free instance and can take up to a minute)',
+  'backtest.loadFailed': 'Could not load the backtest',
+  'backtest.ledgerMismatch':
+    'The service answered with a different lottery than the one selected, so these ' +
+    'numbers are not the ones you asked for.',
+  'backtest.sampleLine': '{done} of {requested} draws replayed · {from}–{to}',
+  'backtest.channelUnavailable':
+    'The 2-digit game cannot be replayed for this ledger: its first prize is five ' +
+    'digits, so the last-two-digits channel is not defined for it. The positional ' +
+    'model below is unaffected.',
+
+  // Verdict
+  'backtest.significant': 'ABOVE CHANCE',
+  'backtest.noEdge': 'NOT PROVEN',
+  'backtest.notSignificant': 'Not significant',
+  'backtest.pValue': 'p = {p} · n = {count}',
+  'backtest.pShort': 'p {p}',
+  'backtest.testPositional': 'positional digit accuracy',
+  'backtest.testTop5': 'top-{count} hit rate',
+  'backtest.verdictSource': 'From {test} · {count} significance test(s) run',
+  'backtest.verdictSignificantTitle': 'The models beat chance on this window',
+  'backtest.verdictChanceTitle': 'Not distinguishable from chance',
+  'backtest.verdictSignificantBody':
+    'The result clears the 0.05 threshold on this window, which is evidence the ' +
+    'models are picking up something real — not proof they will keep doing it, and ' +
+    'not a guarantee of any prize.',
+  'backtest.verdictChanceBody':
+    'A result this close to the baseline happens by luck often enough that this ' +
+    'window cannot claim an edge, and the app does not claim one. More draws would ' +
+    'be needed before saying otherwise.',
+  'backtest.verdictEmptyTitle': 'Not enough history to judge',
+  'backtest.verdictEmptyBody':
+    'This ledger is too short to replay, so no accuracy claim is made. The counts ' +
+    'and the reason are in the notes below.',
+
+  // Metrics
+  'backtest.metricWinRate': 'Win rate',
+  'backtest.metricTop5': 'Top-5 rate',
+  'backtest.metricRoi': 'ROI',
+  'backtest.metricBreakEven': 'Break-even',
+  'backtest.breakEvenHint': 'Hit rate needed to profit',
+  'backtest.metricDigitAccuracy': 'Digit accuracy',
+  'backtest.metricPredictions': 'Predictions',
+  'backtest.metricPValue': 'p-value',
+  'backtest.metricHitsNeeded': 'Hits needed',
+  'backtest.metricHitsNeededHint': 'For significance',
+  'backtest.vsUniformHint': 'uniform {uniform} · random {random}',
+  'backtest.vsUniformSimple': 'uniform {uniform}',
+  'backtest.roiHint': '{payout}× payout · random {random}',
+  'backtest.drawsHint': '{count} draws',
+  'backtest.channelLine': '{channel} channel · {draws} draws',
+  'backtest.hitsNeededLine': '{count} hits would be significant',
+  'backtest.positionCount': '{hits}/{total}',
+
+  // Charts
+  'backtest.aiLabel': 'AI',
+  'backtest.randomLabel': 'Random',
+  'backtest.uniformLabel': 'Uniform',
+  'backtest.zeroLine': 'Break-even',
+  'backtest.rateChartTitle': 'Cumulative top-{count} hit rate',
+  'backtest.rateChartSubtitle': 'Cumulative, so one lucky draw cannot spike it',
+  'backtest.bankrollTitle': 'Bankroll, bet for bet',
+  'backtest.bankrollSubtitle':
+    'One unit on the top pick every draw — the gap between the lines is the edge',
+  'backtest.bankrollAxis': 'After {date}: AI {last} units, random {random}',
+  'backtest.roiTitle': 'Return on investment at {payout}×',
+  'backtest.roiSubtitle': 'Break-even is the centre line · {breakEven}% hit rate needed',
+  'backtest.roiAxis': '−{lose}% loss ← 0 → +{win}% profit',
+  'backtest.roiExactAi': 'AI · top pick only',
+  'backtest.roiExactRandom': 'Random · top pick only',
+  'backtest.roiCoverAi': 'AI · all 5 picks',
+  'backtest.roiCoverRandom': 'Random · all 5 picks',
+
+  // Positional
+  'backtest.positionalTitle': 'Premium positional model',
+  'backtest.positionalSubtitle': 'One digit per position, per draw · {count} predictions',
+  'backtest.positionChartTitle': 'Cumulative digit accuracy',
+  'backtest.positionChartSubtitle': 'Against the 10% uniform baseline',
+  'backtest.positionNote':
+    'The marker on each bar is that position’s 10% baseline — what a blind guess ' +
+    'would score. Green means this position’s own result cleared the 0.05 ' +
+    'threshold on this window.',
+
+  // Method notes
+  'backtest.notesTitle': 'How this was measured',
+  'backtest.notesSubtitle': 'The method, the assumption, and what was left out',
+  'backtest.leakageTitle': 'No leakage',
+  'backtest.payoutTitle': 'Payout assumption',
+  'backtest.methodTitle': 'Method',
+  'backtest.excludedTitle': 'Not backtested here',
+  'backtest.disclaimer':
+    'A backtest measures the past, not the future. Beating the baseline on these ' +
+    'draws says nothing about the next one — a fair draw is independent of every ' +
+    'draw before it.',
+
+  // Paywall hook — the same replay, reduced to one honest line per ledger
+  'backtest.hookTitle': 'Proof, with the baseline beside it',
+  'backtest.hookSubtitle': 'All three ledgers, replayed on draws the models had never seen',
+  'backtest.hookPromise':
+    'Everything is published here, including the ledgers that do not flatter the ' +
+    'models. A hit rate without its baseline is marketing, so the seeded random ' +
+    'player sits on every row.',
+  'backtest.hookCaption':
+    'Each row: the top-{count} hit rate, the same seeded random player, and p ' +
+    'against chance.',
+  'backtest.hookP': 'p',
+  'backtest.hookDraws': '{done} of {requested} draws',
+  'backtest.hookMethod':
+    'No leakage: each draw is predicted from the draws strictly before it. Over a ' +
+    'window this short a p above 0.05 means the model cannot be told apart from ' +
+    'chance, and this card says so rather than implying otherwise.',
+  'backtest.hookCta': 'See the full replay',
+  'backtest.hookCtaSub': 'Every draw, every baseline, every p-value',
+  'backtest.hookLoading': 'Replaying every ledger…',
+  'backtest.hookFailed': 'Could not load the replay',
+  'backtest.hookNoChannel': 'This ledger does not publish this channel',
 
   // ---------------------------------------------------------------------------
   // Models (client-side names and reason labels)
@@ -355,6 +664,23 @@ export const en = {
   'donate.qrA11y': 'QR code for supporting the developers',
   'donate.note':
     'Support is voluntary and has no effect on the draw or on the Heng score.',
+
+  // ---------------------------------------------------------------------------
+  // Legal notice
+  // ---------------------------------------------------------------------------
+  // Compliance wording, quoted verbatim from the legal brief. It is deliberately
+  // NOT edited for tone or tightened for length: this is the sentence the Founder
+  // needs a reviewer to read, and rewriting it would change what was reviewed.
+  //
+  // It lives here rather than inline at either call site because two surfaces render
+  // it — the page footer and the premium paywall — and one of them eventually drifts
+  // from the other when a shared legal string is duplicated. `t('legal.disclaimer')`
+  // also puts it in front of the TH/EN toggle for free, which is the point: a
+  // disclaimer only the English build shows is not a disclaimer.
+  'legal.disclaimer':
+    'This application is intended for statistical analysis and entertainment purposes ' +
+    'only. We do not encourage illegal gambling and do not guarantee the accuracy of ' +
+    'any calculated results.',
 } as const;
 
 /** Every valid translation key. Keys are derived from `en`, never listed by hand. */

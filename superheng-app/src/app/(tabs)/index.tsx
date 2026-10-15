@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import {
   AppHeader,
+  BacktestHook,
   Card,
   Countdown,
   HeaderIconButton,
@@ -521,14 +522,23 @@ export default function DashboardScreen() {
       ) : null}
 
       {/*
+        The backtest hook, sitting immediately above the upgrade card it exists to
+        open. Public and ungated on purpose: the replay of past draws is the argument
+        for paying, so it has to be readable before paying. It owns its own request
+        and states, so nothing above waits on it.
+      */}
+      <BacktestHook />
+
+      {/*
         Premium insights — Bayesian positional model over the 6-digit first
         prize, rendered live.
 
-        PREMIUM MODE: gated behind `PremiumGate` for the beta, so the math and
-        layout can still be tested without handing them to every tester. The gate
-        is a beta door, not access control — this is a static build and the
-        endpoint is public — so a paid tier still needs a server-side entitlement
-        check rather than a client flag.
+        PREMIUM MODE: gated behind `PremiumGate`, which requires a signed-in
+        Supabase account with an active subscription. This is now real access
+        control and not just a door: `/api/predict/premium` validates the bearer
+        token and reads the entitlement from `user_profiles` through RLS, so the
+        panel cannot be opened by anyone the server would refuse. The gate decides
+        what to render; the API decides what is served.
       */}
       <Card>
         <SectionHeader

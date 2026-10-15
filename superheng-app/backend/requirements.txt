@@ -19,6 +19,37 @@ uvicorn[standard]>=0.54
 # --- Database (Supabase / PostgreSQL) --------------------------------------
 # Pulls postgrest-py, storage3, realtime and httpx.
 supabase>=2.32
+# Imported by name in auth.py, which reads `user_profiles` with a hand-written
+# PostgREST request rather than through the supabase-py query builder.
+#
+# Why not the builder: `client.postgrest.auth(token)` sets the token on that
+# client's *default headers*, and the client is a process-wide singleton shared by
+# every concurrent request — so two interleaved entitlement checks would race and
+# authenticate one caller's query with another's token. A per-request httpx call
+# keeps the identity scoped to the call, and `httpx` is what that call is.
+#
+# `supabase` already installs it, but a module imported by name is declared by
+# name: a transitive dependency that `supabase` is free to bump or drop must not
+# be the only thing standing between a fresh clone and a working premium gate.
+httpx>=0.28
+
+# --- Payments (Stripe) -----------------------------------------------------
+# Cards for international customers, PromptPay for Thai users. Used by exactly one
+# module, `payments.py`, which owns the secret and the signature verification;
+# `checkout.py` and `webhook.py` call through it rather than importing the SDK.
+#
+# The SDK version and the Stripe *API* version are different things. 16.0.0 speaks
+# API version `2026-09-30.endive` by default, and `STRIPE_API_VERSION` pins the
+# latter explicitly if you want that (see .env.example).
+#
+# One thing to know before a major upgrade: `SessionCreateParams` in this version
+# has **no** `payment_method_types` key. It was replaced by
+# `allowed_payment_method_types`, which filters Stripe's dynamically eligible
+# methods rather than listing them statically — so PromptPay must also be enabled
+# in the dashboard. A bump that renames a parameter again breaks checkout at
+# *runtime*, not at install time, which is why `tests/test_payments.py` asserts
+# that parameter by name.
+stripe>=16
 
 # --- Configuration ---------------------------------------------------------
 python-dotenv>=1.2
@@ -77,3 +108,13 @@ pytest>=9.1
 #   patsy==1.0.3          formulaic==1.2.2      interface-meta==2.0.1
 #   joblib==1.6.0         threadpoolctl==3.7.0  cloudpickle==3.1.2
 #   narwhals==2.27.1      wrapt==2.5.1rc1
+#
+# Payments addition — a pure-Python wheel, and it brought **no new transitive
+# dependencies**: it needs `requests` (already above) and `typing_extensions`
+# (already present via pydantic). Verified by `pip install stripe` reporting only
+# stripe itself as newly installed.
+#   stripe==16.0.0        (speaks Stripe API version 2026-09-30.endive)
+#
+# NOTE: importing `stripe` costs a measured 385 ms on this machine, which is why
+# `payments.py` imports it lazily inside the functions that need it rather than at
+# module scope. See that module's docstring; `test_payments.py` asserts it.

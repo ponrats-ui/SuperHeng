@@ -77,8 +77,8 @@ function translate(language: Language, key: TranslationKey, params?: Params): st
 
 /**
  * The slice of `localStorage` this module uses, declared structurally rather than
- * as the DOM `Storage` type so the file stays valid in the native project too —
- * the same approach `lib/premium-access.ts` takes.
+ * as the DOM `Storage` type, so the file stays valid in the native project too,
+ * which has no DOM lib.
  */
 type WebStorage = {
   getItem: (key: string) => string | null;

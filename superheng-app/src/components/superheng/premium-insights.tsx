@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
+import { LatestDrawAccuracy } from '@/components/superheng/latest-draw-accuracy';
 import { ProbabilityBar } from '@/components/superheng/probability-bar';
+import {
+  LOTTERY_LABEL_KEYS,
+  POSITION_LABEL_KEYS,
+  STATUS_KEYS,
+} from '@/components/superheng/premium-shared';
 import { SegmentedControl } from '@/components/superheng/segmented-control';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
@@ -14,64 +20,35 @@ import {
   type LotteryType,
   type PositionalDigit,
   type PositionalEstimate,
-  type PositionKey,
   type PremiumInsights,
   type PredictionStatus,
 } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { formatCount, formatLocalizedDate, formatPercent } from '@/lib/format';
-import { useTranslation, type TranslationKey } from '@/lib/i18n';
+import { useTranslation } from '@/lib/i18n';
 
 /**
- * Localised name for each modelled position.
- *
- * The panel deliberately **ignores** the API's own `label` field, which is a
- * bilingual concatenation like "Thousands (หลักพัน)" — the exact mixed-language
- * string this rewrite exists to remove.
+ * The two faces of the panel's own switcher: the live analysis, and the report on
+ * the draws that have already happened.
  */
-const POSITION_LABEL_KEYS: Record<PositionKey, TranslationKey> = {
-  hundred_thousands: 'premium.positionHundredThousands',
-  ten_thousands: 'premium.positionTenThousands',
-  thousands: 'premium.positionThousands',
-  hundreds: 'premium.positionHundreds',
-  tens: 'premium.positionTens',
-  units: 'premium.positionUnits',
-};
-
-/**
- * The endpoint's `status` values as dictionary keys.
- *
- * Mapped rather than interpolated so the raw enum never reaches the screen: the
- * Thai UI used to print `Model status: limited` in English.
- */
-const STATUS_KEYS: Record<string, TranslationKey> = {
-  ok: 'status.ok',
-  limited: 'status.limited',
-  insufficient_data: 'status.insufficientData',
-};
-
-/**
- * Tab label per ledger.
- *
- * Country names rather than the ISO-ish codes the API uses, and translated: a
- * reader in Thai mode should not have to read "Laos" in Latin script to find the
- * Lao lottery. The header's TH/EN switch is a *language* control, so the tab row
- * deliberately does not reuse its two-letter faces — the same "TH" meaning two
- * different things eight pixels apart is a usability trap.
- */
-const LOTTERY_LABEL_KEYS: Record<LotteryType, TranslationKey> = {
-  thai: 'premium.lotteryThai',
-  laos: 'premium.lotteryLaos',
-  vietnam: 'premium.lotteryVietnam',
-};
+type PanelView = 'analysis' | 'accuracy';
 
 /**
  * Premium positional insights — every digit of the selected lottery's first prize.
  *
  * Self-contained: it owns its request, loading, error and empty states, so the
- * dashboard only has to drop it into a card. There **is** a door in front of it —
- * `PremiumGate`, while the beta runs — but it is presentation, not entitlement:
- * this component still calls `/api/predict/premium` directly and that endpoint is
- * unauthenticated, so treat the panel as public until the API enforces access.
+ * dashboard only has to drop it into a card.
+ *
+ * The request carries the signed-in account's bearer token: `/api/predict/premium`
+ * validates it and reads the subscription before answering. The token comes from
+ * `useAuth()` rather than a prop so this component stays self-contained — and so a
+ * token that refreshes mid-session is picked up without the parent re-rendering.
+ * Because the token is in the effect's dependencies, a refresh refetches rather
+ * than leaving a request in flight with a token that has just been replaced.
+ *
+ * A 401/402/403 is rendered differently from a transport failure: retrying an
+ * authorization decision is pointless, and offering a Retry button for one implies
+ * the answer might change.
  *
  * Three states are rendered for the three outcomes the endpoint can produce:
  * a genuine failure (`ApiError`), an empty/thin ledger (`insufficient_data` /
@@ -89,15 +66,38 @@ const LOTTERY_LABEL_KEYS: Record<LotteryType, TranslationKey> = {
  * five. `positions` is keyed by name and parsed as a partial record, so an absent
  * position is a row that is not rendered — never a zero padded in to make the
  * country look like Thailand.
+ *
+ * The panel has two views and one ledger selector. `LatestDrawAccuracy` is a sibling
+ * view rather than a second card, because "what will be drawn" and "what was drawn"
+ * are two answers about the same ledger and putting them under one country switcher
+ * is what stops the reader comparing the wrong country's report against their own
+ * picks. It is mounted only when its view is selected, so a reader who never opens it
+ * never pays for its replay — the most expensive request in the app.
  */
 export function PremiumInsightsPanel() {
   const { colors } = useAppTheme();
   const { t, language } = useTranslation();
+  const { accessToken } = useAuth();
   const [insights, setInsights] = useState<PremiumInsights | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The HTTP status behind `error`, when there was one. Kept because the *reason*
+   * the panel is refusing to load decides what the reader should do next: a 401
+   * needs a new sign-in, a 402 needs a renewal, and a timeout needs patience.
+   */
+  const [errorStatus, setErrorStatus] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   /** The selected ledger. Thai is the default because it is the seeded one. */
   const [lotteryType, setLotteryType] = useState<LotteryType>('thai');
+  /**
+   * Which face of the panel is showing.
+   *
+   * The analysis view is the default: it is what the panel is for, and the accuracy
+   * report is the extra. Switching does not clear `lotteryType` — the two views are
+   * describing the same ledger, and having the country jump back to Thai on a tab
+   * change would silently answer a question about Laos with Thai draws.
+   */
+  const [view, setView] = useState<PanelView>('analysis');
   /**
    * True once the transport has started retrying, i.e. the first attempt did not
    * answer and the instance is probably booting. See the dashboard's LoadingCard
@@ -119,6 +119,10 @@ export function PremiumInsightsPanel() {
     void getPremiumInsights(
       undefined,
       {
+        // The bearer token is what makes the server able to decide. Without one this
+        // is a 401, which is why the gate above refuses to render the panel for an
+        // anonymous visitor instead of letting it fail here.
+        accessToken: accessToken ?? undefined,
         onRetry: () => {
           if (cancelled) return;
           setWaking(true);
@@ -142,6 +146,7 @@ export function PremiumInsightsPanel() {
         }
         setInsights(result);
         setError(null);
+        setErrorStatus(undefined);
         setLoading(false);
       },
       (caught: unknown) => {
@@ -152,6 +157,7 @@ export function PremiumInsightsPanel() {
             ? caught.message
             : 'Something went wrong while loading premium insights.'
         );
+        setErrorStatus(isApiError(caught) ? caught.status : undefined);
         setLoading(false);
       }
     );
@@ -159,13 +165,22 @@ export function PremiumInsightsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey, lotteryType, t]);
+  }, [reloadKey, lotteryType, t, accessToken]);
 
   function retry() {
     setLoading(true);
     setWaking(false);
     setReloadKey((key) => key + 1);
   }
+
+  /**
+   * True when the server refused on entitlement grounds rather than failing.
+   *
+   * 401 = the token is gone; 402 = the subscription lapsed; 403 = there is no
+   * premium subscription on this account. All three are answers, not accidents, and
+   * none of them changes by asking again.
+   */
+  const refused = errorStatus === 401 || errorStatus === 402 || errorStatus === 403;
 
   /**
    * Switches country: clears the previous ledger's numbers and fetches the new one.
@@ -205,10 +220,53 @@ export function PremiumInsightsPanel() {
     </View>
   );
 
+  /**
+   * The view switcher, rendered above the country one and above every state.
+   *
+   * Above every state for the reason the country tabs are: whichever view failed — or
+   * is still loading — the reader has to be able to leave it.
+   */
+  const viewTabs = (
+    <View accessibilityRole="tablist" accessibilityLabel={t('premium.viewFilter')}>
+      <SegmentedControl
+        options={[
+          { key: 'analysis', label: t('premium.viewAnalysis') },
+          { key: 'accuracy', label: t('premium.viewAccuracy') },
+        ]}
+        value={view}
+        onChange={setView}
+      />
+    </View>
+  );
+
+  /** Both switchers, in the order they scope the data: view, then ledger. */
+  const header = (
+    <View style={styles.header}>
+      {viewTabs}
+      {tabs}
+    </View>
+  );
+
+  /*
+    The accuracy view is returned before any of the analysis states, because none of
+    them describe it: the panel's own `loading` and `error` belong to
+    `/api/predict/premium`, and showing "could not load the analysis" over a report
+    that loaded fine would be a statement about the wrong request. The accuracy card
+    owns its own states for the same reason.
+  */
+  if (view === 'accuracy') {
+    return (
+      <View style={styles.container}>
+        {header}
+        <LatestDrawAccuracy lotteryType={lotteryType} />
+      </View>
+    );
+  }
+
   if (loading) {
     return (
       <View style={styles.container}>
-        {tabs}
+        {header}
         <View style={styles.stateBody}>
           <ActivityIndicator color={colors.primary} />
           <ThemedText type="small" themeColor="textSecondary" style={styles.stateText}>
@@ -222,32 +280,42 @@ export function PremiumInsightsPanel() {
   if (error || !insights) {
     return (
       <View style={styles.container}>
-        {tabs}
+        {header}
         <View style={styles.errorWrap}>
           <View style={styles.errHeader}>
             <View style={[styles.errRule, { backgroundColor: colors.danger }]} />
             <ThemedText type="smallBold" style={[styles.errTitle, { color: colors.danger }]}>
               {t('premium.loadFailed')}
             </ThemedText>
-          </View>
-          <ThemedText type="small" themeColor="textSecondary" style={styles.errBody}>
+          </View>            <ThemedText type="small" themeColor="textSecondary" style={styles.errBody}>
             {error ?? t('premium.unknownError')}
           </ThemedText>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('common.retry')}
-            onPress={retry}
-            style={({ pressed }) => [
-              styles.retry,
-              { backgroundColor: colors.primary },
-              pressed && styles.pressed,
-            ]}>
-            <ThemedText
-              type="smallBold"
-              style={[styles.retryText, { color: colors.onPrimary }]}>
-              {t('common.retry')}
+          {/*
+            Retry is withheld for an entitlement refusal. `PremiumGate` above the
+            panel is what resolves one — by signing in or subscribing — so the panel
+            says that instead of offering a button that would return the same answer.
+          */}
+          {refused ? (
+            <ThemedText type="small" themeColor="textMuted" style={styles.errHint}>
+              {t('premium.refusedHint')}
             </ThemedText>
-          </Pressable>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('common.retry')}
+              onPress={retry}
+              style={({ pressed }) => [
+                styles.retry,
+                { backgroundColor: colors.primary },
+                pressed && styles.pressed,
+              ]}>
+              <ThemedText
+                type="smallBold"
+                style={[styles.retryText, { color: colors.onPrimary }]}>
+                {t('common.retry')}
+              </ThemedText>
+            </Pressable>
+          )}
         </View>
       </View>
     );
@@ -259,7 +327,7 @@ export function PremiumInsightsPanel() {
 
   return (
     <View style={styles.container}>
-      {tabs}
+      {header}
 
       <View style={styles.metaRow}>
         <StatusPill status={insights.status} />
@@ -474,6 +542,9 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     marginTop: Spacing.two,
   },
+  header: {
+    gap: Spacing.two,
+  },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -637,6 +708,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 20,
     marginTop: Spacing.two,
+  },
+  errHint: {
+    fontSize: 11,
+    lineHeight: 18,
+    marginTop: Spacing.two,
+    fontStyle: 'italic',
   },
   retry: {
     alignSelf: 'flex-start',

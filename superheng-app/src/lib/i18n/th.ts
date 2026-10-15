@@ -59,11 +59,13 @@ export const th: Record<TranslationKey, string> = {
   'nav.myNumber': 'เลขของฉัน',
   'nav.insights': 'เจาะลึก',
   'nav.performance': 'ความแม่นยำ',
+  'nav.backtest': 'ทดสอบย้อนหลัง',
 
   'header.dashboardSubtitle': 'วิเคราะห์ความน่าจะเป็น',
   'header.insightsSubtitle': 'เจาะลึกสถิติ',
   'header.myNumberSubtitle': 'วิเคราะห์เลขใดก็ได้',
   'header.performanceSubtitle': 'ผลงานและความโปร่งใส',
+  'header.backtestSubtitle': 'พิสูจน์ได้ ไม่ใช่แค่คำโฆษณา',
   'header.gridBadge': 'ตาราง 00–99',
 
   // Dashboard — hero + tiles
@@ -152,7 +154,7 @@ export const th: Record<TranslationKey, string> = {
   'premium.subtitle': 'แบบจำลองเบย์เซียนรายตำแหน่ง · รางวัลที่ 1',
   'premium.modePill': '✨ โหมด Premium',
   'premium.loginPill': '🔒 เข้าสู่ระบบ Premium',
-  'premium.unlockHint': 'เปิดแบบฟอร์มเข้าสู่ระบบ Premium (ต้องใช้รหัสผ่าน)',
+  'premium.unlockHint': 'เปิดแบบฟอร์มเข้าสู่ระบบ Premium',
   'premium.analysisLoading': 'กำลังโหลดการวิเคราะห์รายตำแหน่ง…',
   'premium.analysisWaking':
     'กำลังปลุกเซิร์ฟเวอร์… (เซิร์ฟเวอร์สลีปอยู่ อาจใช้เวลาถึง 1 นาที)',
@@ -163,17 +165,80 @@ export const th: Record<TranslationKey, string> = {
   'premium.downloading': 'กำลังดาวน์โหลด…',
   'premium.railTitle': 'Premium',
   'premium.railSubtitle': 'เข้าสู่ระบบเพื่อเปิดแบบจำลองรายตำแหน่ง',
-  'premium.username': 'ชื่อผู้ใช้',
-  'premium.password': 'รหัสผ่าน',
-  'premium.signIn': 'เข้าสู่ระบบ',
-  'premium.signOut': '🔒 ล็อกโหมด Premium',
+  'premium.signOut': 'ออกจากระบบ',
   'premium.accessTitle': 'สิทธิ์การเข้าถึง Premium',
   'premium.accessSubtitle':
-    'โหมด Premium สำหรับทดสอบเบต้า — เข้าสู่ระบบเพื่อดูการวิเคราะห์รายตำแหน่ง',
+    'เข้าสู่ระบบเพื่อสมัครสมาชิก หรือเพื่อเปิดการวิเคราะห์ที่คุณชำระเงินไว้แล้ว',
+
+  // --- บัญชี (แทนประตูรหัสผ่านเดิม) ---------------------------------------
+  'premium.modeSignIn': 'เข้าสู่ระบบ',
+  'premium.modeRegister': 'สมัครสมาชิก',
+  'premium.email': 'อีเมล',
+  'premium.newPassword': 'รหัสผ่าน',
+  'premium.passwordHint': 'อย่างน้อย 6 ตัวอักษร',
+  'premium.checkEmail':
+    'สร้างบัญชีแล้ว กรุณาตรวจสอบอีเมลเพื่อยืนยันที่อยู่ แล้วเข้าสู่ระบบอีกครั้ง',
+  'premium.signedInAs': 'เข้าสู่ระบบในชื่อ {email}',
+  'premium.activeUntil': 'ใช้งานได้ถึง {date}',
+
+  // --- สถานะสมาชิก ------------------------------------------------------------
+  // "หมดอายุ" กับ "ยังไม่เคยสมัคร" เป็นคำขอที่ต่างกัน (ต่ออายุ กับ สมัคร) จึงใช้
+  // คำคนละชุด ไม่รวมเป็น "ใช้งานไม่ได้" คำเดียว
+  'premium.noSubscriptionTitle': 'ยังไม่มีสมาชิกที่ใช้งานได้',
+  'premium.noSubscriptionBody':
+    'บัญชีนี้เข้าสู่ระบบแล้วแต่ยังไม่มีสมาชิก Premium ที่ใช้งานได้ การวิเคราะห์รายตำแหน่งจะถูกล็อกไว้จนกว่าจะมี',
+  'premium.lapsedTitle': 'สมาชิกหมดอายุแล้ว',
+  'premium.lapsedBody':
+    'สมาชิก Premium ของบัญชีนี้สิ้นสุดลงแล้ว ต่ออายุเพื่อเปิดการวิเคราะห์รายตำแหน่งอีกครั้ง',
+  'premium.planTitle': 'เลือกแพ็กเกจ',
+  'premium.perMonth': 'เดือน',
+  'premium.perYear': 'ปี',
+  'premium.checkout': 'อัปเกรด',
+  'premium.checkoutFor': '{plan} — {price}',
+  'premium.checkoutMethods': 'บัตร หรือ พร้อมเพย์',
+  'premium.upgradeCta': 'อัปเกรดเป็น Premium (บัตร · พร้อมเพย์)',
+  'premium.upgradeCtaComingSoon': 'อัปเกรดเป็น Premium',
+  'premium.checkoutUnavailable':
+    'ยังไม่เปิดรับชำระเงิน ยังไม่มีการเรียกเก็บเงินและยังไม่มีการเริ่มสมาชิก ปุ่มนี้เชื่อมต่อกับปลายทางจริงแล้ว และจะใช้งานได้ทันทีเมื่อเชื่อมต่อผู้ให้บริการชำระเงิน',
+  'premium.checkoutCharged':
+    'ผู้ให้บริการชำระเงินยอมรับรายการนี้แล้ว สมาชิกของคุณจะปรากฏที่นี่เมื่อเซิร์ฟเวอร์ได้รับการยืนยัน',
+  'premium.checkoutOpening': 'กำลังเปิดหน้าชำระเงินที่ปลอดภัยของ Stripe…',
+  'premium.checkoutCreated':
+    'กำลังเปิดหน้าชำระเงินที่ปลอดภัยของ Stripe ยังไม่มีการเรียกเก็บเงิน — สมาชิกของคุณจะเริ่มเมื่อ Stripe ยืนยันการชำระเงิน ไม่ใช่เมื่อกลับมาที่หน้านี้',
+  'premium.checkoutRedirectFailed':
+    'Stripe สร้างหน้าชำระเงินแล้ว แต่อุปกรณ์นี้เปิดหน้านั้นไม่ได้ ยังไม่มีการเรียกเก็บเงิน — หากเปิดตัวบล็อกป๊อปอัปอยู่ กรุณาอนุญาตเว็บไซต์นี้แล้วลองใหม่',
+  'premium.alreadyPremium': 'บัญชีนี้มีสมาชิก Premium ที่ใช้งานได้อยู่แล้ว',
+  'premium.accountUnreadable':
+    'เข้าสู่ระบบแล้ว แต่ตรวจสอบสถานะสมาชิกไม่ได้ในขณะนี้ เป็นปัญหาของระบบ ไม่ใช่ข้อสรุปเกี่ยวกับบัญชีของคุณ',
+  'premium.profileMissing':
+    'ยังไม่มีข้อมูลโปรไฟล์สำหรับบัญชีนี้ จึงยังผูกสมาชิกกับบัญชีไม่ได้ ผู้ดูแลระบบต้องรัน backend/schema_profiles.sql',
+  'premium.refusedHint':
+    'เซิร์ฟเวอร์ปฏิเสธคำขอนี้ กรุณาเข้าสู่ระบบด้านล่าง หรือสมัครสมาชิกหากยังไม่ได้สมัคร — การลองใหม่จะไม่ได้คำตอบที่ต่างออกไป',
+  'premium.notConfiguredTitle': 'บิลด์นี้ยังไม่ได้ตั้งค่าระบบบัญชี',
+  'premium.notConfiguredBody':
+    'บิลด์นี้ไม่มีการตั้งค่า Supabase จึงเข้าสู่ระบบไม่ได้ ส่วนแดชบอร์ด ผลรางวัล และการทดสอบย้อนหลังยังใช้งานได้ตามปกติ',
+
+  // --- ข้อผิดพลาดในการเข้าสู่ระบบ ------------------------------------------
+  'premium.authError.unconfigured': 'บิลด์นี้ไม่มีการตั้งค่าระบบบัญชี',
+  'premium.authError.invalidCredentials': 'อีเมลหรือรหัสผ่านไม่ถูกต้อง',
+  'premium.authError.emailNotConfirmed':
+    'ที่อยู่นี้ยังไม่ได้รับการยืนยัน กรุณาตรวจสอบอีเมลเพื่อกดลิงก์ยืนยัน',
+  'premium.authError.alreadyRegistered': 'มีบัญชีที่ใช้ที่อยู่นี้อยู่แล้ว กรุณาเข้าสู่ระบบแทน',
+  'premium.authError.weakPassword': 'รหัสผ่านสั้นเกินไป ต้องมีอย่างน้อย 6 ตัวอักษร',
+  'premium.authError.rateLimited': 'พยายามหลายครั้งเกินไปในขณะนี้ กรุณารอสักครู่แล้วลองใหม่',
+  'premium.authError.invalidEmail': 'กรุณากรอกอีเมลและรหัสผ่านให้ถูกต้อง',
+  'premium.authError.network': 'เชื่อมต่อระบบบัญชีไม่ได้ กรุณาตรวจสอบการเชื่อมต่อแล้วลองใหม่',
+  'premium.authError.unknown': 'เข้าสู่ระบบไม่สำเร็จ',
+  // คุณค่าที่แสดงบนการ์ดล็อก เหนือช่องรหัสผ่าน — ชื่อโมเดลคงไว้เป็น Latin
+  // ตามตารางคำศัพท์ในหัวไฟล์ (ARIMA, Markov, Bayesian) เพราะทับศัพท์แล้วจำยากกว่า
+  'premium.valueTitle': 'ทำไมต้องปลดล็อก Premium',
+  'premium.valueMarkets': 'ปลดล็อกครบ 3 ตลาด: ไทย, ลาว, และฮานอย',
+  'premium.valueModels': 'วิเคราะห์เจาะลึกด้วย AI ขั้นสูง 4 โมเดล (ARIMA, Markov, Bayesian, Frequency)',
+  'premium.valuePositions': 'เจาะจงความน่าจะเป็นรายตำแหน่ง (หลักพันถึงหลักหน่วย)',
+  'premium.valueRealtime': 'อัปเดตสถิติและเทรนด์แบบ Real-time',
   'premium.lockedPill': '🔒 Premium',
-  'premium.wrongCredentials': 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',
   'premium.gateNote':
-    'ประตูทดลองสำหรับแผง Premium ไม่ใช่ระบบรักษาความปลอดภัยบัญชี ตัวเลขมาจาก endpoint สาธารณะ จึงควรถือเป็นข้อมูลสาธารณะ',
+    'บัญชีของคุณใช้เพียงเพื่อตรวจสอบสถานะสมาชิกเท่านั้น แดชบอร์ด ผลรางวัล และการทดสอบย้อนหลังยังฟรีและไม่ต้องใช้บัญชี',
   'premium.lockedTitle': 'ล็อกอยู่',
   'premium.lockedCta': 'ปลดล็อกเพื่อดูการวิเคราะห์',
   'premium.unlockWithPremium': '{title} — ปลดล็อกด้วย Premium',
@@ -191,6 +256,44 @@ export const th: Record<TranslationKey, string> = {
   'premium.positionTens': 'หลักสิบ',
   'premium.positionUnits': 'หลักหน่วย',
   'premium.vsMarginal': 'x{lift} เทียบส่วนขอบ · {count}/{support}',
+  // --- ความแม่นยำงวดล่าสุด (ตรวจการบ้าน AI) ---------------------------------
+  // ชื่อสองหน้าของปุ่มสลับมุมมองในการ์ด Premium — สั้น เพราะอยู่ข้าง ๆ ปุ่มเลือก
+  // ประเทศที่ใช้คอนโทรลตัวเดียวกัน
+  'premium.viewAnalysis': 'การวิเคราะห์',
+  'premium.viewAccuracy': 'ความแม่นยำงวดล่าสุด',
+  'premium.viewFilter': 'มุมมองการวิเคราะห์ หรือความแม่นยำงวดล่าสุด',
+  'premium.accuracy.title': 'ความแม่นยำงวดล่าสุด',
+  'premium.accuracy.subtitle': 'คำทำนายของโมเดลในแต่ละงวด เทียบกับผลรางวัลที่ออกจริง',
+  // บอกก่อนตัวเลข ไม่ใช่ต่อท้าย: ระบบไม่ได้บันทึกคำทำนายไว้ จึงต้องพูดให้ชัดว่า
+  // ที่เห็นคือการคำนวณย้อนหลัง
+  'premium.accuracy.replayTitle': 'คำนวณย้อนหลัง ไม่ใช่คำทำนายที่บันทึกไว้',
+  'premium.accuracy.replayBody':
+    'ระบบไม่ได้บันทึกคำทำนายไว้ตอนที่คำนวณ จึงคำนวณคำทำนายของแต่ละงวดใหม่โดยใช้เฉพาะงวดที่เกิดก่อนหน้านั้นเท่านั้น ผลที่ได้จึงเทียบเท่ากับสิ่งที่โมเดลน่าจะตอบ แต่ไม่ใช่หลักฐานว่าได้รันจริงตอนนั้น',
+  'premium.accuracy.loading': 'กำลังโหลดรายงานความแม่นยำ…',
+  'premium.accuracy.loadFailed': 'โหลดรายงานความแม่นยำไม่สำเร็จ',
+  'premium.accuracy.empty':
+    'ยังไม่มีงวดใดที่มีประวัติย้อนหลังเพียงพอสำหรับสร้างคำทำนาย',
+  'premium.accuracy.latestDraw': 'งวดล่าสุด',
+  'premium.accuracy.aiPredicted': 'AI ทำนาย',
+  'premium.accuracy.actualResult': 'ผลที่ออกจริง',
+  'premium.accuracy.hit': 'ถูก',
+  'premium.accuracy.miss': 'ไม่ถูก',
+  'premium.accuracy.nearMiss': 'ติด 3 อันดับ',
+  'premium.accuracy.rankOf': 'อันดับ {rank}',
+  'premium.accuracy.positionsHit': 'ถูก {hits}/{total} ตำแหน่ง',
+  'premium.accuracy.trainedOn': 'เทรนจาก {count} งวด',
+  'premium.accuracy.overWindow': 'จาก {draws} งวดล่าสุด',
+  'premium.accuracy.hitRate': 'อัตราถูก {rate} เทียบฐาน {baseline}',
+  'premium.accuracy.pValue': 'p = {p}',
+  'premium.accuracy.significant': 'ดีกว่าการเดาในตัวอย่างนี้',
+  'premium.accuracy.notSignificant': 'ยังแยกจากการเดาไม่ได้ที่ขนาดตัวอย่างนี้',
+  'premium.accuracy.channels': 'รางวัลเลขท้าย 2 ตัว',
+  'premium.accuracy.channelTop': 'สองตัวท้ายรางวัลที่ 1',
+  'premium.accuracy.channelBottom': 'เลขท้าย 2 ตัว',
+  'premium.accuracy.exact': 'ตรงตัว',
+  'premium.accuracy.inTop5': 'อยู่ใน 5 อันดับ',
+  'premium.accuracy.recentDraws': 'งวดที่เทียบ',
+  'premium.accuracy.limitsTitle': 'สิ่งที่รายงานนี้ยังยืนยันไม่ได้',
   'premium.metaRow': '{count} งวด · ล่าสุด {prize} ({date})',
   'premium.thinRowPillHint':
     'สถานะที่ใช้เงื่อนไขของหลักนี้มีงวดในอดีตน้อยเกินไป จึงถอยไปใช้ความน่าจะเป็นส่วนขอบ',
@@ -202,20 +305,149 @@ export const th: Record<TranslationKey, string> = {
   'paywall.features':
     'รับการวิเคราะห์เจาะลึกเลข 3 ตัว และเลข 6 ตัว (รางวัลที่ 1) ด้วยโมเดล AI ระดับสูง',
   'paywall.comingSoonPill': '🔒 เร็วๆ นี้',
-  'paywall.comingSoon': 'ฟีเจอร์นี้กำลังเปิดให้บริการเร็วๆ นี้ (Coming Soon)',
+  'paywall.livePill': 'บัตร · พร้อมเพย์',
+  'paywall.authTitle': 'เข้าสู่ระบบ หรือ สมัครสมาชิก',
+  'paywall.authBody':
+    'สมาชิกผูกกับบัญชีผู้ใช้ กรุณาเข้าสู่ระบบ หรือสมัครสมาชิกใหม่ — ราคาและช่องทางชำระเงินเหมือนกันทั้งสองทาง',
+  'paywall.signInRequired':
+    'กรุณาเข้าสู่ระบบหรือสมัครสมาชิกด้านบนก่อน แล้วปุ่มนี้จะเปิดขั้นตอนชำระเงิน',
+  'paywall.checkoutUnavailable':
+    'ยังไม่เปิดรับชำระเงิน จึงยังไม่มีการเรียกเก็บเงินและยังไม่มีการเริ่มสมาชิก ดูสถานะทั้งหมดได้ที่การ์ด Premium บนแดชบอร์ด',
+  'paywall.checkoutFailed':
+    'เริ่มขั้นตอนชำระเงินไม่สำเร็จ ยังไม่มีการเรียกเก็บเงิน กรุณาลองใหม่อีกครั้ง',
+  'paywall.checkoutRedirectFailed':
+    'Stripe สร้างหน้าชำระเงินแล้ว แต่อุปกรณ์นี้เปิดหน้านั้นไม่ได้ ยังไม่มีการเรียกเก็บเงิน — หากเปิดตัวบล็อกป๊อปอัปอยู่ กรุณาอนุญาตเว็บไซต์นี้แล้วลองใหม่',
+  'paywall.paymentReturning':
+    'Stripe กำลังยืนยันการชำระเงินของคุณ หน้านี้จะอัปเดตเองโดยอัตโนมัติ ปกติใช้เวลาไม่กี่วินาที',
+  'paywall.paymentCancelled': 'ยกเลิกการชำระเงินแล้ว ยังไม่มีการเรียกเก็บเงิน',
+  'paywall.methodsTitle': 'ช่องทางชำระเงิน',
+  'paywall.methodsCard': 'บัตรเครดิตหรือบัตรเดบิต — Visa, Mastercard, JCB, Amex',
+  'paywall.methodsPromptPay': 'พร้อมเพย์ (QR) — สแกนด้วยแอปธนาคารไทย',
   'paywall.benefitsTitle': 'สิ่งที่คุณจะได้รับ',
   'paywall.benefit1': 'เลข 3 ตัว (3-Digit) — อันดับและคะแนน Heng รายตำแหน่ง',
   'paywall.benefit2': 'เลข 6 ตัว (รางวัลที่ 1) — เปิดให้บริการเมื่อโมเดลขั้นสูงพร้อมใช้งาน',
   'paywall.benefit3': 'ประวัติการวิเคราะห์ย้อนหลังแบบเต็ม ไม่จำกัดการเรียกดู',
   'paywall.price': 'เพียง 99 บาท/เดือน',
-  'paywall.priceSub': 'ยกเลิกได้ตลอดเวลา · ชำระด้วยบัตรเครดิต',
-  'paywall.subscribe': 'สมัครเลย',
-  'paywall.subscribeHint': 'สมัครสมาชิก (ยังไม่เปิดให้บริการ)',
-  'paywall.noCharge': 'ยังไม่มีค่าใช้จ่ายใดๆ ในขณะนี้ — การกดสมัครจะยังไม่ถูกเรียกเก็บเงิน',
+  'paywall.priceSub': 'ชำระครั้งเดียว · ใช้งาน 30 วัน',
+  'paywall.subscribe': 'อัปเกรดด้วยบัตรหรือพร้อมเพย์',
+  'paywall.subscribeHint': 'อัปเกรดด้วยบัตรเครดิตหรือพร้อมเพย์',
+  'paywall.subscribeComingSoon': 'สมัครสมาชิก',
+  'paywall.subscribeComingSoonHint': 'สมัครสมาชิก (ยังไม่เปิดให้บริการ)',
+  'paywall.noCharge':
+    'ยังไม่มีการเรียกเก็บเงิน จนกว่าคุณจะชำระเงินเสร็จสิ้นบนหน้าของ Stripe',
+  'paywall.noChargeComingSoon':
+    'ยังไม่มีค่าใช้จ่ายใดๆ ในขณะนี้ — การกดสมัครจะยังไม่ถูกเรียกเก็บเงิน',
   'paywall.dismiss': 'ไว้ก่อน — กลับไปหน้าหลัก',
   'paywall.dismissHint': 'ย้อนกลับ',
   'paywall.disclaimer':
     'การวิเคราะห์ทั้งหมดเป็นค่าประมาณทางสถิติจากข้อมูลย้อนหลัง ไม่มีโมเดลใดรับประกันผลรางวัลได้',
+
+  // Backtest — หน้านี้มีไว้ให้ “เชื่อได้” คำจึงต้องไม่ปัดผลที่ยังสรุปไม่ได้ให้กลายเป็น
+  // ชัยชนะ: "ยังพิสูจน์ไม่ได้" ไม่ใช่ "ไม่เก่ง" และทุกอัตราต้องมีอัตราฐานกำกับข้างๆ เสมอ
+  // เพราะอัตราทายถูกที่ลอยอยู่เดี่ยวๆ คือสิ่งที่หน้านี้ตั้งใจไม่ทำ
+  'backtest.title': 'ทดสอบย้อนหลัง',
+  'backtest.subtitle': 'ทดสอบทุกโมเดลกับงวดที่ยังไม่เคยเห็น',
+  'backtest.windowDraws': 'ล่าสุด {count}',
+  'backtest.loading': 'กำลังทดสอบย้อนหลัง {count} งวด โดยแต่ละงวดใช้เฉพาะข้อมูลก่อนหน้านั้น…',
+  'backtest.waking': 'กำลังปลุกเซิร์ฟเวอร์… (เครื่องฟรีจะหลับ และอาจใช้เวลาถึงหนึ่งนาที)',
+  'backtest.loadFailed': 'โหลดผลทดสอบย้อนหลังไม่สำเร็จ',
+  'backtest.ledgerMismatch':
+    'บริการตอบกลับด้วยหวยคนละประเภทกับที่เลือก ตัวเลขที่แสดงจึงไม่ใช่ของหวยที่เลือกไว้',
+  'backtest.sampleLine': 'ทดสอบ {done} จาก {requested} งวด · {from}–{to}',
+  'backtest.channelUnavailable':
+    'หวยนี้ทดสอบเกม 2 ตัวย้อนหลังไม่ได้ เพราะรางวัลที่ 1 มี 5 หลัก จึงไม่มีหลัก 2 ตัวท้ายให้เทียบ ส่วนโมเดลรายตำแหน่งด้านล่างไม่ได้รับผลกระทบ',
+
+  // คำตัดสิน
+  'backtest.significant': 'สูงกว่าการเดา',
+  'backtest.noEdge': 'ยังพิสูจน์ไม่ได้',
+  'backtest.notSignificant': 'ไม่มีนัยสำคัญ',
+  'backtest.pValue': 'p = {p} · n = {count}',
+  'backtest.pShort': 'p {p}',
+  'backtest.testPositional': 'ความแม่นยำรายตำแหน่ง',
+  'backtest.testTop5': 'อัตราถูกใน {count} อันดับสูงสุด',
+  'backtest.verdictSource': 'จาก{test} · ทดสอบนัยสำคัญ {count} รายการ',
+  'backtest.verdictSignificantTitle': 'โมเดลทำได้ดีกว่าการเดาในงวดชุดนี้',
+  'backtest.verdictChanceTitle': 'ยังแยกจากความบังเอิญไม่ได้',
+  'backtest.verdictSignificantBody':
+    'ผลนี้ผ่านเกณฑ์ 0.05 ในงวดชุดนี้ ถือเป็นหลักฐานว่าโมเดลจับได้บางอย่างจริง ไม่ใช่หลักประกันว่าจะทำได้ต่อเนื่อง และไม่ได้รับประกันรางวัลใดๆ',
+  'backtest.verdictChanceBody':
+    'ผลที่ใกล้เคียงอัตราฐานขนาดนี้เกิดขึ้นจากความบังเอิญได้บ่อยพอที่งวดชุดนี้จะยังสรุปว่าได้เปรียบไม่ได้ แอปจึงไม่สรุปเช่นนั้น ต้องมีงวดมากขึ้นก่อนจึงจะพูดเป็นอย่างอื่นได้',
+  'backtest.verdictEmptyTitle': 'ข้อมูลย้อนหลังไม่พอยืนยัน',
+  'backtest.verdictEmptyBody':
+    'งวดในระบบน้อยเกินกว่าจะทดสอบได้ จึงไม่มีการสรุปความแม่นยำ จำนวนงวดและเหตุผลอยู่ในหมายเหตุด้านล่าง',
+
+  // ตัวเลขหลัก
+  'backtest.metricWinRate': 'อัตราทายถูก',
+  'backtest.metricTop5': 'อัตราถูกใน 5 อันดับ',
+  'backtest.metricRoi': 'ผลตอบแทน (ROI)',
+  'backtest.metricBreakEven': 'จุดคุ้มทุน',
+  'backtest.breakEvenHint': 'อัตราทายถูกที่ต้องได้จึงจะกำไร',
+  'backtest.metricDigitAccuracy': 'ความแม่นยำรายหลัก',
+  'backtest.metricPredictions': 'จำนวนการทาย',
+  'backtest.metricPValue': 'ค่า p',
+  'backtest.metricHitsNeeded': 'จำนวนที่ต้องถูก',
+  'backtest.metricHitsNeededHint': 'จึงจะมีนัยสำคัญ',
+  'backtest.vsUniformHint': 'อัตราฐาน {uniform} · สุ่ม {random}',
+  'backtest.vsUniformSimple': 'อัตราฐาน {uniform}',
+  'backtest.roiHint': 'จ่าย {payout} เท่า · สุ่ม {random}',
+  'backtest.drawsHint': '{count} งวด',
+  'backtest.channelLine': 'ช่อง{channel} · {draws} งวด',
+  'backtest.hitsNeededLine': 'ต้องถูก {count} ครั้งจึงมีนัยสำคัญ',
+  'backtest.positionCount': '{hits}/{total}',
+
+  // กราฟ
+  'backtest.aiLabel': 'AI',
+  'backtest.randomLabel': 'สุ่ม',
+  'backtest.uniformLabel': 'อัตราฐาน',
+  'backtest.zeroLine': 'จุดคุ้มทุน',
+  'backtest.rateChartTitle': 'อัตราถูกใน 5 อันดับ (สะสม)',
+  'backtest.rateChartSubtitle': 'สะสมไปเรื่อยๆ งวดเดียวที่ฟลุ๊กจึงทำให้กราฟพุ่งไม่ได้',
+  'backtest.bankrollTitle': 'เงินทุน เทียบเดิมพันต่อเดิมพัน',
+  'backtest.bankrollSubtitle':
+    'เดิมพัน 1 หน่วยที่เลขอันดับหนึ่งทุกงวด ช่องว่างระหว่างเส้นคือความได้เปรียบ',
+  'backtest.bankrollAxis': 'ถึง {date}: AI {last} หน่วย, สุ่ม {random}',
+  'backtest.roiTitle': 'ผลตอบแทนการลงทุนที่อัตราจ่าย {payout} เท่า',
+  'backtest.roiSubtitle': 'เส้นกลางคือจุดคุ้มทุน · ต้องทายถูก {breakEven}%',
+  'backtest.roiAxis': 'ขาดทุน −{lose}% ← 0 → กำไร +{win}%',
+  'backtest.roiExactAi': 'AI · เลขอันดับหนึ่ง',
+  'backtest.roiExactRandom': 'สุ่ม · เลขอันดับหนึ่ง',
+  'backtest.roiCoverAi': 'AI · ทั้ง 5 เลข',
+  'backtest.roiCoverRandom': 'สุ่ม · ทั้ง 5 เลข',
+
+  // รายตำแหน่ง
+  'backtest.positionalTitle': 'โมเดลรายตำแหน่ง (Premium)',
+  'backtest.positionalSubtitle': 'ทายหนึ่งหลักต่อหนึ่งตำแหน่งต่อหนึ่งงวด · {count} การทาย',
+  'backtest.positionChartTitle': 'ความแม่นยำรายหลัก (สะสม)',
+  'backtest.positionChartSubtitle': 'เทียบอัตราฐาน 10%',
+  'backtest.positionNote':
+    'ขีดบนแท่งคืออัตราฐาน 10% ของตำแหน่งนั้น ซึ่งคืออัตราที่การเดาสุ่มจะได้ สีเขียวหมายความว่าผลของตำแหน่งนั้นผ่านเกณฑ์ 0.05 ในงวดชุดนี้',
+
+  // หมายเหตุวิธีวัด
+  'backtest.notesTitle': 'วิธีวัดผลนี้',
+  'backtest.notesSubtitle': 'วิธีวัด ข้อสมมติ และสิ่งที่ไม่ได้ทดสอบ',
+  'backtest.leakageTitle': 'ไม่มีการรั่วไหลของข้อมูล',
+  'backtest.payoutTitle': 'ข้อสมมติเรื่องอัตราจ่าย',
+  'backtest.methodTitle': 'วิธีการ',
+  'backtest.excludedTitle': 'ไม่ได้ทดสอบในหน้านี้',
+  'backtest.disclaimer':
+    'การทดสอบย้อนหลังเป็นการวัดอดีต ไม่ใช่การพยากรณ์อนาคต การชนะอัตราฐานในงวดเหล่านี้ไม่ได้บอกอะไรเกี่ยวกับงวดถัดไป เพราะการออกรางวัลที่เป็นธรรมย่อมเป็นอิสระจากงวดก่อนหน้าทั้งหมด',
+
+  // การ์ดชวนอัปเกรด — ผลทดสอบชุดเดิม ย่อเหลือบรรทัดเดียวต่อตลาด
+  'backtest.hookTitle': 'หลักฐาน พร้อมอัตราฐานกำกับทุกบรรทัด',
+  'backtest.hookSubtitle': 'ทั้งสามตลาด ย้อนทดสอบด้วยงวดที่โมเดลยังไม่เคยเห็น',
+  'backtest.hookPromise':
+    'เราตีพิมพ์ทุกผลไว้ที่นี่ รวมถึงตลาดที่ไม่ได้ทำให้โมเดลดูดี อัตราทายถูกที่ลอยอยู่เดี่ยวๆ คือการตลาด เราจึงแสดงผลของผู้เล่นสุ่มที่ใช้เมล็ดเดียวกันกำกับไว้ทุกบรรทัด',
+  'backtest.hookCaption':
+    'แต่ละบรรทัดคืออัตราถูกใน {count} อันดับสูงสุด เทียบกับผู้เล่นสุ่มคนเดียวกัน และค่า p เทียบกับการเดา',
+  'backtest.hookP': 'p',
+  'backtest.hookDraws': '{done} จาก {requested} งวด',
+  'backtest.hookMethod':
+    'ไม่มีการรั่วไหลของข้อมูล แต่ละงวดพยากรณ์จากงวดก่อนหน้าเท่านั้น ในช่วงสั้นขนาดนี้ ค่า p ที่มากกว่า 0.05 แปลว่าแยกโมเดลออกจากการเดาไม่ได้ และการ์ดนี้ก็บอกตามนั้น ไม่ได้สื่อเป็นอย่างอื่น',
+  'backtest.hookCta': 'ดูการย้อนทดสอบทั้งหมด',
+  'backtest.hookCtaSub': 'ทุกงวด ทุกอัตราฐาน ทุกค่า p',
+  'backtest.hookLoading': 'กำลังย้อนทดสอบทุกตลาด…',
+  'backtest.hookFailed': 'โหลดผลการย้อนทดสอบไม่สำเร็จ',
+  'backtest.hookNoChannel': 'ตลาดนี้ไม่เผยแพร่ช่องนี้',
 
   // Models
   'models.frequency': 'ความถี่',
@@ -317,4 +549,12 @@ export const th: Record<TranslationKey, string> = {
   'donate.qrCaption': 'สแกน QR เพื่อเลี้ยงกาแฟทีมงาน',
   'donate.qrA11y': 'QR code สำหรับสนับสนุนนักพัฒนา',
   'donate.note': 'การสนับสนุนเป็นไปโดยความสมัครใจ และไม่มีผลต่อผลการออกรางวัลหรือคะแนน Heng Score',
+
+  // Legal notice — ข้อความตามที่ฝ่ายกฎหมายกำหนด ใช้คำต่อคำ ไม่ปรับสำนวน
+  // (ดูคำอธิบายใน en.ts ว่าทำไมข้อความนี้ต้องไม่ถูกแก้ไข)
+  //
+  // ประโยคนี้ค่อนข้างยาวและมีช่องว่างสองจุด จึงตัดบรรทัดในซอร์สไม่ได้
+  // แต่ lineHeight ที่ใช้แสดงผลเผื่อสระและวรรณยุกต์ไทยไว้แล้ว
+  'legal.disclaimer':
+    'แอปพลิเคชันนี้จัดทำขึ้นเพื่อการวิเคราะห์ทางสถิติและความบันเทิงเท่านั้น ไม่สนับสนุนให้เล่นการพนันที่ผิดกฎหมาย และไม่รับประกันผลลัพธ์ของการคำนวณใดๆ',
 };

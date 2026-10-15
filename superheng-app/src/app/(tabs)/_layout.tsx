@@ -84,6 +84,26 @@ export default function TabsLayout() {
           ),
         }}
       />
+      {/*
+        Fifth and last tab. A clock-with-arrow rather than another chart icon:
+        this screen is specifically the *replay* of past draws, and reusing a
+        line-chart glyph eight pixels from the performance tab's own line chart
+        would make the two indistinguishable at a glance.
+      */}
+      <Tabs.Screen
+        name="backtest"
+        options={{
+          title: t('nav.backtest'),
+          tabBarIcon: ({ color, size }) => (
+            <TabIcon
+              ios="clock.arrow.circlepath"
+              android="history"
+              color={color}
+              size={size}
+            />
+          ),
+        }}
+      />
     </Tabs>
   );
 }

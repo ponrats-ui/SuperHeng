@@ -1,182 +1,406 @@
-import { useState, type ReactNode } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { router } from 'expo-router';
+import { useEffect, useState, type ReactNode } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
+import { PremiumAuthForm } from '@/components/superheng/premium-auth-form';
+import { LegalDisclaimer } from '@/components/superheng/legal-disclaimer';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
-import { useTranslation } from '@/lib/i18n';
-import { isPremiumCredential, readPremiumUnlock, writePremiumUnlock } from '@/lib/premium-access';
+import { getCheckoutPlans, type CheckoutCatalogue } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
+import { useTranslation, type TranslationKey } from '@/lib/i18n';
+
+/** Text color for the filled gold CTA — dark on both themes, since gold is light in each. */
+const ON_GOLD = '#101422';
 
 export type PremiumGateProps = {
-  /** Rendered only while unlocked — normally `<PremiumInsightsPanel />`. */
+  /** Rendered only when the signed-in account has an active subscription. */
   children: ReactNode;
 };
 
 /**
- * Beta gate in front of the premium-mode panel.
+ * The value proposition shown above the form, in display order.
  *
- * The panel used to be open on purpose, so the math and layout could be checked
- * on device. It is now behind a password while the beta runs, which means the
- * question a user asks shifts from "what does this number mean" to "may I look",
- * and this component's only job is to answer that without pretending to be more
- * than it is.
+ * Keys rather than strings so the list is translated at render and the TH/EN toggle
+ * swaps it in place. A fifth selling point is a dictionary entry plus one line here.
+ */
+const FEATURE_KEYS: readonly TranslationKey[] = [
+  'premium.valueMarkets',
+  'premium.valueModels',
+  'premium.valuePositions',
+  'premium.valueRealtime',
+];
+
+/**
+ * The door in front of the Premium panel — now a real one.
  *
- * **It is not access control.** The web build is a static export and the premium
- * endpoint is unauthenticated, so the credentials are readable in the bundle and
- * the data is one request away. `src/lib/premium-access.ts` states the limits in
- * full. Treat the panel as public until the API enforces an entitlement.
+ * REPLACES A CLIENT-SIDE PASSWORD, AND WHY THAT MATTERED
+ *   This used to check a username/password pair against a digest compiled into the
+ *   bundle and remember the answer in `localStorage`. `src/lib/premium-access.ts`
+ *   was candid about it: the digest shipped to every visitor, and the endpoint it
+ *   guarded answered unauthenticated callers, so the gate stopped a curious tester
+ *   and nothing else. It is deleted.
  *
- * Presentation follows `LockedPanel`: gold-tinted border, `colors.accent` for
- * gold text (never `colors.gold`, which fails contrast on a light surface), and
- * a pill labelled with what the door actually is.
+ *   Now the panel is opened by a Supabase session, and the decision is the
+ *   **server's**: `/api/predict/premium` validates the bearer token and reads the
+ *   account's `user_profiles` row through RLS (`backend/auth.py`). This component
+ *   renders that verdict; it cannot produce one. If it gets it wrong, the request is
+ *   refused anyway — which is the property the old gate could not have.
+ *
+ * FIVE STATES, EACH RENDERED HONESTLY
+ *   1. Accounts not configured on this build — says so, rather than showing a form
+ *      that could never work.
+ *   2. Session still being read — a spinner, so a returning subscriber does not see
+ *      the sign-in form flash before their panel appears.
+ *   3. Signed out — the value proposition and the sign-in / create-account form,
+ *      which is shared with the paywall (`premium-auth-form.tsx`).
+ *   4. Signed in, no active subscription — who they are, what is locked, the price,
+ *      and one "Upgrade to Premium" button that opens `/premium`, where the purchase
+ *      actually happens. Expired reads differently from never-subscribed, because
+ *      "renew" and "subscribe" are different asks.
+ *   5. Signed in and entitled — the panel, plus what they are signed in as and a way
+ *      out.
+ *
+ * ONE FUNNEL, NOT TWO
+ *   This component used to run the checkout itself. `/premium` runs the same one, and
+ *   it is the screen Stripe sends a customer back to, so it is the copy that survives.
+ *   The gate's job is the gate: let people in, tell them what they have, and point the
+ *   ones who do not at the paywall.
+ *
+ * The subscription state comes from `useAuth()`, which reads it from `/api/me`. This
+ * component deliberately does not re-derive "is the subscription still valid" from
+ * the expiry date: two implementations of that boundary is two chances to disagree,
+ * and the one the API enforces is the one that counts.
  */
 export function PremiumGate({ children }: PremiumGateProps) {
   const { colors } = useAppTheme();
   const { t } = useTranslation();
-  const [unlocked, setUnlocked] = useState(readPremiumUnlock);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  /**
-   * A flag rather than the message: the wording is translated at render, so
-   * switching language while a failed attempt is on screen re-renders it in the
-   * new language instead of leaving the old one behind.
-   */
-  const [failed, setFailed] = useState(false);
+  const auth = useAuth();
+
+  const [catalogue, setCatalogue] = useState<CheckoutCatalogue | null>(null);
+
+  const needsCheckout = auth.signedIn && !auth.isPremium;
+  /** Whether a gateway is actually connected — see `CheckoutCatalogue.live`. */
+  const live = catalogue?.live === true;
+  /** The live price, when the catalogue answered. Nothing is claimed without it. */
+  const price = catalogue?.plans[0]
+    ? `${catalogue.plans[0].amount_display} / ${t(
+        catalogue.plans[0].interval === 'year' ? 'premium.perYear' : 'premium.perMonth'
+      )}`
+    : null;
 
   /**
-   * Checks the pair and opens the door.
+   * Plans are fetched only when a purchase is actually on the table.
    *
-   * A failure keeps what was typed and reports the reason, rather than clearing
-   * the fields and leaving the user to wonder which half was wrong.
+   * The premium card renders on every dashboard load, so fetching the catalogue
+   * unconditionally would add a request for every visitor including the ones who are
+   * already subscribed. A signed-out visitor sees the value proposition; the price
+   * they need is on the paywall.
    */
-  function submit() {
-    if (!isPremiumCredential(username, password)) {
-      setFailed(true);
-      return;
-    }
-    writePremiumUnlock(true);
-    setUnlocked(true);
-    setFailed(false);
-    // Do not keep the password in memory once the door is open.
-    setPassword('');
+  useEffect(() => {
+    if (!needsCheckout) return;
+    let cancelled = false;
+
+    void getCheckoutPlans().then(
+      (result) => {
+        if (!cancelled) setCatalogue(result);
+      },
+      () => {
+        // Silently absent: without the catalogue the CTA stops naming card and
+        // PromptPay and the price is omitted. A price list that failed to load is
+        // not worth an error card over the product itself.
+        if (!cancelled) setCatalogue(null);
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [needsCheckout]);
+
+  /**
+   * Sends a signed-in free account to the paywall.
+   *
+   * The gate used to host the checkout itself and duplicate the whole flow —
+   * catalogue, session creation, the `http://` refusal — that `/premium` already
+   * implements. One of those copies would eventually drift, and the paywall is the
+   * one Stripe returns customers to, so it is the one that keeps the flow. What
+   * stays here is the decision the gate is responsible for: this account is signed
+   * in and not entitled, so the way forward is the paywall.
+   */
+  function openPaywall() {
+    router.push('/premium');
   }
 
-  /** Lets the account holder close the panel again before handing the device over. */
-  function lock() {
-    writePremiumUnlock(false);
-    setUnlocked(false);
-    setUsername('');
-    setPassword('');
-    setFailed(false);
+  // -------------------------------------------------------------------------
+  // 1. No Supabase configuration on this build
+  // -------------------------------------------------------------------------
+  if (!auth.configured) {
+    return (
+      <Panel>
+        <Pill>{t('premium.lockedPill')}</Pill>
+        <ThemedText style={styles.title}>{t('premium.notConfiguredTitle')}</ThemedText>
+        <ThemedText type="small" themeColor="textMuted" style={styles.subtitle}>
+          {t('premium.notConfiguredBody')}
+        </ThemedText>
+      </Panel>
+    );
   }
 
-  if (unlocked) {
+  // -------------------------------------------------------------------------
+  // 2. Still reading the stored session
+  // -------------------------------------------------------------------------
+  if (!auth.ready) {
+    return (
+      <Panel>
+        <View style={styles.centerRow}>
+          <ActivityIndicator color={colors.primary} />
+          <ThemedText type="small" themeColor="textMuted">
+            {t('common.loading')}
+          </ThemedText>
+        </View>
+      </Panel>
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. Signed in and entitled
+  // -------------------------------------------------------------------------
+  if (auth.isPremium) {
+    const expiry = auth.account?.subscription_expiry;
     return (
       <View style={styles.unlockedWrap}>
         {children}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t('premium.signOut')}
-          onPress={lock}
-          style={({ pressed }) => [styles.lockAgain, pressed && styles.pressed]}>
-          <ThemedText type="small" themeColor="textMuted" style={styles.lockAgainText}>
-            {t('premium.signOut')}
+        <View style={styles.accountRow}>
+          <ThemedText type="small" themeColor="textMuted" style={styles.accountText}>
+            {t('premium.signedInAs', { email: auth.email ?? '' })}
+            {expiry ? ` · ${t('premium.activeUntil', { date: expiry.slice(0, 10) })}` : ''}
           </ThemedText>
-        </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('premium.signOut')}
+            onPress={() => void auth.signOut()}
+            style={({ pressed }) => [styles.linkButton, pressed && styles.pressed]}>
+            <ThemedText type="small" style={[styles.linkText, { color: colors.accent }]}>
+              {t('premium.signOut')}
+            </ThemedText>
+          </Pressable>
+        </View>
       </View>
     );
   }
 
-  return (
-    <View style={[styles.form, { borderColor: `${colors.gold}66` }]}>
-      <View style={[styles.pill, { borderColor: `${colors.gold}80` }]}>
-        <ThemedText type="small" style={[styles.pillText, { color: colors.accent }]}>
-          {t('premium.loginPill')}
+  // -------------------------------------------------------------------------
+  // 3. Signed out — the form
+  // -------------------------------------------------------------------------
+  if (!auth.signedIn) {
+    return (
+      <Panel rendered={false}>
+        <Pill>{t('premium.loginPill')}</Pill>
+        <ThemedText style={styles.title}>{t('premium.accessTitle')}</ThemedText>
+        <ThemedText type="small" themeColor="textMuted" style={styles.subtitle}>
+          {t('premium.accessSubtitle')}
         </ThemedText>
-      </View>
 
-      <ThemedText style={styles.title}>{t('premium.accessTitle')}</ThemedText>
+        <View style={[styles.value, { borderColor: `${colors.gold}40`, backgroundColor: `${colors.gold}0D` }]}>
+          <ThemedText style={[styles.valueTitle, { color: colors.accent }]}>
+            {t('premium.valueTitle')}
+          </ThemedText>
+          {FEATURE_KEYS.map((key) => (
+            <View key={key} style={styles.feature}>
+              <View style={[styles.check, { borderColor: `${colors.gold}80`, backgroundColor: `${colors.gold}26` }]}>
+                <ThemedText type="small" style={[styles.checkMark, { color: colors.accent }]}>
+                  ✓
+                </ThemedText>
+              </View>
+              <ThemedText type="small" style={styles.featureText}>
+                {t(key)}
+              </ThemedText>
+            </View>
+          ))}
+        </View>
+
+        <View style={[styles.divider, { backgroundColor: `${colors.gold}33` }]} />
+
+        {/* The sign-in / create-account form is shared with the paywall at
+            `/premium`, so both surfaces behave identically — see
+            `premium-auth-form.tsx` for what it does and what it deliberately does
+            not do. */}
+        <PremiumAuthForm />
+
+        {/*
+          Directly beneath the sign-in / create-account button. This is the moment a
+          visitor decides whether to engage with a paid product, so it is where the
+          "statistics, not betting" statement needs to be — before the account is
+          created, not only in a footer they have not scrolled to.
+        */}
+        <LegalDisclaimer style={styles.disclaimer} />
+
+        <ThemedText type="small" themeColor="textMuted" style={styles.note}>
+          {t('premium.gateNote')}
+        </ThemedText>
+      </Panel>
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. Signed in without an active subscription
+  // -------------------------------------------------------------------------
+  const lapsed = auth.account?.refusal_status === 402;
+
+  return (
+    <Panel>
+      <Pill>{t('premium.loginPill')}</Pill>
+      <ThemedText style={styles.title}>
+        {lapsed ? t('premium.lapsedTitle') : t('premium.noSubscriptionTitle')}
+      </ThemedText>
       <ThemedText type="small" themeColor="textMuted" style={styles.subtitle}>
-        {t('premium.accessSubtitle')}
+        {lapsed ? t('premium.lapsedBody') : t('premium.noSubscriptionBody')}
       </ThemedText>
 
-      <View style={styles.field}>
-        <ThemedText type="small" themeColor="textMuted" style={styles.label}>
-          {t('premium.username')}
-        </ThemedText>
-        <TextInput
-          value={username}
-          onChangeText={setUsername}
-          placeholder={t('premium.username')}
-          placeholderTextColor={colors.textMuted}
-          autoCapitalize="none"
-          autoCorrect={false}
-          autoComplete="username"
-          returnKeyType="next"
-          accessibilityLabel={t('premium.username')}
-          style={[
-            styles.input,
-            {
-              color: colors.text,
-              backgroundColor: colors.backgroundElement,
-              borderColor: colors.cardBorder,
-            },
-          ]}
-        />
-      </View>
+      {/*
+        Signed in but the entitlement could not be read — a cold backend, or the
+        `user_profiles` table not yet created. Reported as its own state rather than
+        as "no subscription", because the two need different actions from the user
+        and from the operator.
+      */}
+      {auth.accountFailure ? (
+        <View
+          accessibilityRole="alert"
+          style={[styles.notice, { borderColor: `${colors.danger}66`, backgroundColor: `${colors.danger}14` }]}>
+          <ThemedText type="small" style={styles.noticeText}>
+            {t('premium.accountUnreadable')}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textMuted" style={styles.noticeDetail}>
+            {auth.accountFailure.message}
+          </ThemedText>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('common.retry')}
+            onPress={() => void auth.refreshAccount()}
+            style={({ pressed }) => [styles.retryInline, pressed && styles.pressed]}>
+            <ThemedText type="small" style={[styles.linkText, { color: colors.accent }]}>
+              {t('common.retry')}
+            </ThemedText>
+          </Pressable>
+        </View>
+      ) : null}
 
-      <View style={styles.field}>
-        <ThemedText type="small" themeColor="textMuted" style={styles.label}>
-          {t('premium.password')}
-        </ThemedText>
-        <TextInput
-          value={password}
-          onChangeText={setPassword}
-          placeholder="••••••"
-          placeholderTextColor={colors.textMuted}
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-          autoComplete="current-password"
-          returnKeyType="go"
-          onSubmitEditing={submit}
-          accessibilityLabel={t('premium.password')}
-          style={[
-            styles.input,
-            {
-              color: colors.text,
-              backgroundColor: colors.backgroundElement,
-              borderColor: colors.cardBorder,
-            },
-          ]}
-        />
-      </View>
-
-      {failed ? (
-        <ThemedText
-          type="small"
-          accessibilityLiveRegion="polite"
-          style={[styles.error, { color: colors.danger }]}>
-          {t('premium.wrongCredentials')}
+      {auth.account?.profile_missing ? (
+        <ThemedText type="small" themeColor="textMuted" style={styles.profileMissing}>
+          {t('premium.profileMissing')}
         </ThemedText>
       ) : null}
 
+      {/*
+        The price, when the catalogue answered. Shown next to the CTA rather than on
+        the paywall alone: somebody deciding whether to create an account is deciding
+        whether the product is worth this number, and making them tap through to find
+        out is the kind of thing that ends the session.
+      */}
+      {price ? (
+        <ThemedText type="small" themeColor="textMuted" style={styles.upgradePrice}>
+          {price}
+        </ThemedText>
+      ) : null}
+
+      {/*
+        The upgrade CTA — one button, and it opens the paywall rather than starting a
+        checkout from here. `/premium` is where the plan, the payment methods and
+        Stripe's return URL already live, so the funnel has one destination instead of
+        two that could disagree.
+
+        The wording follows the catalogue: naming card and PromptPay is only honest
+        once a gateway exists to offer them, and before that the same button says
+        "Upgrade to Premium" and the paywall explains that it is not open yet.
+      */}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={t('premium.signIn')}
-        onPress={submit}
+        accessibilityLabel={t(live ? 'premium.upgradeCta' : 'premium.upgradeCtaComingSoon')}
+        onPress={openPaywall}
         style={({ pressed }) => [
-          styles.submit,
-          { backgroundColor: colors.primary },
+          styles.upgrade,
+          { backgroundColor: colors.gold },
           pressed && styles.pressed,
         ]}>
-        <ThemedText type="smallBold" style={[styles.submitText, { color: colors.onPrimary }]}>
-          {t('premium.signIn')}
+        <ThemedText style={[styles.upgradeText, { color: ON_GOLD }]}>
+          {t(live ? 'premium.upgradeCta' : 'premium.upgradeCtaComingSoon')}
         </ThemedText>
       </Pressable>
 
-      <ThemedText type="small" themeColor="textMuted" style={styles.note}>
-        {t('premium.gateNote')}
+      {/*
+        Directly beneath the CTA, which is this branch's way forward. This is the
+        moment a user decides whether to engage with a paid product, so it is where
+        the "statistics, not betting" statement needs to be — before the account is
+        created, not only in a footer they have not scrolled to.
+      */}
+      <LegalDisclaimer style={styles.disclaimer} />
+
+      <View style={styles.accountRow}>
+        <ThemedText type="small" themeColor="textMuted" style={styles.accountText}>
+          {t('premium.signedInAs', { email: auth.email ?? '' })}
+        </ThemedText>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('premium.signOut')}
+          onPress={() => void auth.signOut()}
+          style={({ pressed }) => [styles.linkButton, pressed && styles.pressed]}>
+          <ThemedText type="small" style={[styles.linkText, { color: colors.accent }]}>
+            {t('premium.signOut')}
+          </ThemedText>
+        </Pressable>
+      </View>
+    </Panel>
+  );
+}
+
+/**
+ * The gold-tinted container every locked state shares.
+ *
+ * `rendered` controls the glass layers rather than the border: the wash and the top
+ * sheen read as "this is a purchase surface", which is right for the form and
+ * wrong for "your subscription could not be checked".
+ */
+function Panel({ children, rendered = true }: { children: ReactNode; rendered?: boolean }) {
+  const { colors } = useAppTheme();
+
+  return (
+    <View style={[styles.form, { borderColor: `${colors.gold}66`, backgroundColor: `${colors.card}F2` }]}>
+      {rendered ? (
+        <>
+          {/*
+            Glass, in layers that all degrade gracefully: a translucent fill, a faint
+            gold wash, and a 1px highlight along the top edge. Plain Views rather than
+            `expo-glass-effect`, which is iOS-only — a paywall that is glass on one
+            platform and flat on another is worse than one that is consistently itself.
+          */}
+          <View
+            pointerEvents="none"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={[StyleSheet.absoluteFill, { backgroundColor: `${colors.gold}0A` }]}
+          />
+          <View
+            pointerEvents="none"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={[styles.sheen, { backgroundColor: `${colors.gold}2E` }]}
+          />
+        </>
+      ) : null}
+      {children}
+    </View>
+  );
+}
+
+function Pill({ children }: { children: ReactNode }) {
+  const { colors } = useAppTheme();
+
+  return (
+    <View style={[styles.pill, { borderColor: `${colors.gold}80`, backgroundColor: `${colors.gold}14` }]}>
+      <ThemedText type="small" style={[styles.pillText, { color: colors.accent }]}>
+        {children}
       </ThemedText>
     </View>
   );
@@ -185,12 +409,64 @@ export function PremiumGate({ children }: PremiumGateProps) {
 const styles = StyleSheet.create({
   form: {
     gap: Spacing.two,
-    padding: Spacing.three,
-    borderRadius: Radius.lg,
+    padding: Spacing.four,
+    borderRadius: Radius.xl,
     borderWidth: 1,
-    // The border colour is applied inline from `colors.gold` (theme-dependent),
-    // so a locked premium panel reads as the same kind of door as the
-    // gold-bordered LockedPanel used for the other premium tiers.
+    // Clips the wash and the sheen to the rounded corner, which is what makes the
+    // translucent fill read as a pane instead of a tinted rectangle.
+    overflow: 'hidden',
+  },
+  sheen: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 1,
+  },
+
+  // Value proposition -----------------------------------------------------
+  value: {
+    gap: Spacing.two,
+    marginTop: Spacing.one,
+    padding: Spacing.three,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  valueTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
+  },
+  feature: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.two,
+  },
+  check: {
+    width: 18,
+    height: 18,
+    borderRadius: Radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Nudged onto the first line's optical centre rather than its box top.
+    marginTop: 1,
+  },
+  checkMark: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+  },
+  featureText: {
+    flex: 1,
+    fontSize: 12,
+    // Thai tone and vowel marks need a taller line box than the Latin default.
+    lineHeight: 20,
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    marginTop: Spacing.one,
   },
   pressed: {
     opacity: 0.7,
@@ -211,8 +487,8 @@ const styles = StyleSheet.create({
 
   title: {
     // Thai tone and vowel marks need a taller line box than the Latin default.
-    fontSize: 18,
-    lineHeight: 30,
+    fontSize: 20,
+    lineHeight: 32,
     fontWeight: '800',
   },
   subtitle: {
@@ -220,40 +496,45 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  field: {
-    gap: Spacing.half,
-  },
-  label: {
+  // Upgrade CTA -----------------------------------------------------------
+  upgradePrice: {
     fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.3,
+    lineHeight: 18,
+    textAlign: 'center',
+    marginTop: Spacing.one,
   },
-  input: {
-    // 44 minimum: measured against the other controls on this screen, which the
-    // UAT found as small as 24px, and the reason this one is not.
-    minHeight: 44,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    fontSize: 14,
-  },
-
-  error: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  submit: {
-    minHeight: 44,
+  upgrade: {
+    // 48 minimum: this is the one control on the card that has to be easy to hit.
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: Radius.pill,
     paddingHorizontal: Spacing.four,
   },
-  submitText: {
-    fontSize: 13,
+  upgradeText: {
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+
+  notice: {
+    gap: Spacing.one,
+    padding: Spacing.two,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  noticeText: {
+    fontSize: 12,
+    lineHeight: 19,
     fontWeight: '700',
+  },
+  noticeDetail: {
+    fontSize: 11,
+    lineHeight: 17,
+  },
+  retryInline: {
+    alignSelf: 'flex-start',
+    paddingVertical: Spacing.one,
   },
 
   note: {
@@ -261,17 +542,48 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 
-  unlockedWrap: {
-    gap: Spacing.two,
+  disclaimer: {
+    // The notice wants 16px of separation (`mt-4`). `styles.form` already applies an
+    // 8px `gap`, so half of it is contributed here rather than doubling up to 24.
+    marginTop: Spacing.two,
   },
-  lockAgain: {
-    alignSelf: 'flex-end',
+
+  profileMissing: {
+    fontSize: 11,
+    lineHeight: 17,
+  },
+
+  // Signed-in footer ------------------------------------------------------
+  accountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+    flexWrap: 'wrap',
+  },
+  accountText: {
+    flexShrink: 1,
+    fontSize: 11,
+  },
+  linkButton: {
     // Tap target, not a caption: padding rather than relying on the text box.
     paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.two,
   },
-  lockAgainText: {
+  linkText: {
     fontSize: 11,
     fontWeight: '700',
+  },
+
+  centerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.two,
+    paddingVertical: Spacing.three,
+  },
+
+  unlockedWrap: {
+    gap: Spacing.two,
   },
 });

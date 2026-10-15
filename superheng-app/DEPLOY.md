@@ -438,6 +438,259 @@ curl -s "https://superheng-api.onrender.com/api/predict/basic?limit=100" | head 
 
 ---
 
+## Step 6 — Accounts and the premium subscription
+
+This is what turns the premium panel from a client-side password into something
+that can be sold. It has to be done **after** the backend and frontend are
+deployed, because it adds a requirement to an endpoint the old frontend does not
+satisfy (see the ordering warning at the end of this section).
+
+### 6.1 Create the entitlement schema
+
+Supabase dashboard → SQL Editor → paste **`backend/schema_profiles.sql`** → Run.
+It is idempotent, so running it twice (or running a fixed version later) changes
+nothing.
+
+It creates `public.user_profiles` (one row per account, keyed to `auth.users`),
+enables row-level security, and grants a signed-in user exactly two things: read
+their own row, and change their own `display_name`. `subscription_tier`,
+`subscription_expiry` and `subscription_provider` are **not** writable by any
+client, by design — an RLS policy chooses a row, only a column-level grant chooses
+a column, and both are needed to actually stop someone from setting their own tier
+to `premium` with a PATCH.
+
+It also installs three triggers: one that creates the profile row on signup, one
+that keeps the copied email address in step, and one that maintains `updated_at`.
+It backfills a row for every account that already exists.
+
+It also creates the **payment ledger** and the one function that grants an
+entitlement: `public.payment_events` and `public.apply_payment_event(...)`. Those
+are not used until Step 6.5, and they are safe to apply early.
+
+The file's last section is a set of verification queries — including the two
+curl-shaped checks that must be **refused**, and the two that check the payment
+ledger's fences — which are the ones worth actually running before taking money.
+
+### 6.2 Point the frontend at the project
+
+Add two variables to the Pages build (Pages → Settings → Environment variables),
+and to `superheng-app/.env` for local development:
+
+```
+EXPO_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=<the publishable / anon key>
+```
+
+`EXPO_PUBLIC_*` is inlined at **build** time — changing these in the dashboard
+does nothing until the next build — and they are readable in the shipped bundle.
+That is correct here: the publishable key is meant to be public and row-level
+security is what protects the data. **Never** put the `service_role` key in either
+place; it bypasses RLS and belongs only in `backend/.env` for ingestion.
+
+Nothing new is needed in the backend to *read* an entitlement, and that is
+deliberate: it validates tokens with Supabase Auth and reads the profile **using
+the caller's own token**, so it holds no privileged credential at all for that part.
+`SUPABASE_KEY` in `backend/.env` must be the **anon** key for that to hold — a
+`service_role` key there would still work, but it would also succeed for any user
+id, which is exactly the protection being bought.
+
+The one exception is *writing* an entitlement, which happens only in the payment
+webhook and needs its own credential — `SUPABASE_SERVICE_KEY`, added in Step 6.5.
+Keeping the two separate is the point: the read path stays RLS-bound, and the single
+write path is the one place that holds a key which bypasses it.
+
+### 6.3 Supabase Auth settings worth deciding now
+
+* **Confirm email.** With it on (the default), `signUp` returns no session and the
+  user must click a link before signing in. On **web** that works — the app reads
+the session from the redirect URL. On **native** it does *not*: the link opens a
+  browser, not the app, so confirmation cannot complete without deep linking
+  (`expo-linking`, a `superheng://` scheme, and `exchangeCodeForSession`). Until
+  that exists, either leave confirmation off or expect native signups not to finish.
+* **Redirect URLs.** Add the production origin (`https://<project>.pages.dev`) and
+  `http://localhost:8081` under Authentication → URL Configuration, or the
+  confirmation link will bounce.
+* **Minimum password length** defaults to 6; the app checks the same number so the
+  error is instant rather than a round trip. Changing one without the other makes
+  the client's message wrong.
+
+### 6.4 Making an account premium by hand
+
+Before Step 6.5 is done — and afterwards too, for a comped account or a support
+fix — entitlements are granted from the SQL editor (which connects with privileges
+that bypass RLS):
+
+```sql
+update public.user_profiles
+   set subscription_tier     = 'premium',
+       subscription_expiry   = now() + interval '1 year',
+       subscription_provider = 'manual'
+ where email = 'you@example.com';
+```
+
+To revoke, set the tier back to `'free'` — do not delete the row, or the next
+sign-in has no profile to read and is refused.
+
+### 6.5 Turn on payments (Stripe, card + PromptPay)
+
+Cards for international customers, PromptPay for Thai ones. Both go through
+Stripe's **hosted** Checkout page, so no Stripe code and no publishable key ever
+ships in the app — see [`../.env.example`](../.env.example) for why the
+`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` from the original brief is deliberately absent
+rather than merely unset.
+
+**Until both secrets in step 3 are set, the app stays in its "coming soon" state,
+and that is not a placeholder.** `GET /api/checkout/plans` reports `live: false`, the
+paywall hides the payment-method block and its button says "Subscribe", and
+`POST /api/checkout/create-session` answers with the honest "nothing was charged"
+shape. A secret key *without* a webhook secret counts as **not configured**, on
+purpose: it would create real, payable sessions that could never grant access — the
+customer pays and nothing happens.
+
+#### 1. Set up the Stripe side
+
+1. **Enable PromptPay** — Dashboard → Settings → Payment methods → PromptPay.
+   Stripe documents it as **THB-only and for Thailand-registered accounts**. If the
+   account is not Thai, skip this and set `STRIPE_PAYMENT_METHODS=card` (step 3) —
+   otherwise the offer simply does not appear, which is a filter rather than an
+   error. The reasoning is in the `payment_method_types` note at the top of
+   `backend/payments.py`.
+2. **Nothing else.** There is no product or price to create: the session is built
+   from this server's own catalogue in `backend/checkout.py`, line items included,
+   so the price the app shows and the price Stripe charges have exactly one source
+   and cannot drift apart.
+
+#### 2. Register the webhook endpoint
+
+Dashboard → Developers → Webhooks → Add endpoint.
+
+```
+URL    : https://superheng-api.onrender.com/api/webhook/stripe
+Events : checkout.session.completed
+         checkout.session.async_payment_succeeded
+         checkout.session.async_payment_failed
+         checkout.session.expired
+```
+
+The `async_payment_*` events are not decoration. A session can complete while its
+payment is still settling, so the grant waits for the event that means the money
+actually arrived; without those two subscriptions a delayed payment would be
+recorded for the ledger and never granted.
+
+Copy the endpoint's **signing secret** (`whsec_…`). Each endpoint has its own, and
+`stripe listen` prints a *different* one — pasting the wrong one makes every
+delivery fail verification with a 400 that is indistinguishable from an attack in
+the logs.
+
+#### 3. Set the environment variables
+
+Render → Environment:
+
+```
+STRIPE_SECRET_KEY=sk_live_…            # or sk_test_… while testing
+STRIPE_WEBHOOK_SECRET=whsec_…          # from the endpoint in step 2
+SUPABASE_SERVICE_KEY=…                 # service_role / sb_secret_…, NOT the anon key
+FRONTEND_BASE_URL=https://superheng-3yf.pages.dev
+```
+
+`SUPABASE_SERVICE_KEY` is the one genuinely new credential. Everywhere else the API
+reads `user_profiles` with the **caller's own** token, and that is the whole design
+— but a column-level grant deliberately refuses `subscription_tier` to
+`authenticated`, so the one function that writes an entitlement needs a key that
+bypasses RLS. It is a full-access admin credential for the project: server-side
+only, never `EXPO_PUBLIC_`, never in the app, never committed. It is read in exactly
+one place, `backend/webhook.py`.
+
+`FRONTEND_BASE_URL` is where Stripe sends the customer back after paying. Without
+it the fallback is the first non-wildcard `CORS_ORIGINS` entry, and failing that
+`http://localhost:8081`. A payment still succeeds and is still granted without it —
+the webhook does not depend on the redirect — but the customer would land on a dead
+page immediately after paying, which is a bad way to end a purchase.
+
+Optional: `STRIPE_PAYMENT_METHODS` (`card,promptpay` by default; use `card` on a
+non-Thai account, or `dynamic` to let Stripe choose its own set), `STRIPE_API_VERSION`
+to pin the API version, `STRIPE_TIMEOUT_SECONDS` to change the 10-second call budget.
+
+#### 4. Re-apply the schema
+
+Run **`backend/schema_profiles.sql`** again (SQL Editor → paste → Run). It is
+idempotent, and this run adds:
+
+* **`public.payment_events`** — the payment ledger. `id` is Stripe's event id and is
+  part of the primary key, which **is** the idempotency mechanism: Stripe retries a
+  failed delivery for up to three days and can deliver the same event twice even
+  when nothing failed, and a retried "payment succeeded" must not extend a
+  subscription twice. It is `on delete set null`, **not** a cascade — deleting an
+  account must not delete the record that money was taken, because the refund
+  dispute and the revenue report both arrive afterwards.
+* **`public.apply_payment_event(...)`** — the only code anywhere that writes
+  `subscription_tier`. It claims the event and extends the subscription inside one
+  transaction, so two concurrent deliveries cannot both grant. A renewal extends
+  from the later of now and the current expiry, so buying again never discards time
+  already paid for.
+
+**Run verification query 6 in that file before going live.** PostgreSQL grants
+`EXECUTE` to `PUBLIC` on a newly created function and PostgREST exposes every
+function in the schema it serves, so a missing `REVOKE` would be a
+grant-yourself-premium endpoint reachable with the app's *public* anon key. The file
+revokes it from `public, anon, authenticated` and grants it to `service_role` only;
+query 6 is the check that it worked, and query 7 proves the retry is a no-op.
+
+#### 5. Verify with a real payment — in test mode
+
+`sk_test_…` plus Stripe's test cards exercise the whole path without moving money.
+Card `4242 4242 4242 4242`, any future expiry, any CVC. In test mode PromptPay
+generates a QR you scan with Stripe's own test page.
+
+Then check these in order. Each catches a different failure:
+
+1. `GET /api/health` → `checkout.gateway_configured: true`, `provider: "stripe"`,
+   `entitlement_writer: "configured"`. If the last one says `not_configured`,
+   `SUPABASE_SERVICE_KEY` is missing and every payment would be taken and dropped.
+2. Tap **Upgrade** while signed out → the app asks you to sign in first.
+3. Sign in and tap it → you leave for `checkout.stripe.com`. The app must **not**
+   claim anything has been paid at this point, because nothing has.
+4. Pay → you return to `/premium`, which re-asks the server for a few seconds
+   ("Stripe is confirming your payment") and then shows the account as premium.
+5. Open the webhook endpoint's **Events** in the Stripe dashboard: the delivery
+   should be `200`. A `400` means the signing secret does not match that endpoint. A
+   `503` means the database step failed, and the response body says which variable
+   or which file to apply.
+6. **Re-send the same event** from the dashboard. The response must say `duplicate`
+   and the expiry must not move. That is the idempotency check, and it is the one
+   worth doing before launch.
+7. Refund the test payment and confirm the account keeps access until its expiry.
+   There is deliberately no automatic revocation on refund — losing access the
+   instant a refund is issued is a product decision, and it should be made
+   explicitly rather than as a side effect.
+
+#### The invariant this feature is built around
+
+`POST /api/checkout/create-session` **never** charges and **never** grants, with a
+gateway configured or without one: it returns `charged: false` and
+`subscription_granted: false` every time. Premium is written in exactly one place —
+`backend/webhook.py`, from a request whose Stripe signature verified — and the
+database enforces the same rule from the other side. Two answers to "is this account
+premium" therefore cannot disagree, because there is only one writer.
+
+Still unverified end to end: **native iOS/Android rendering** of the upgrade flow.
+The redirect helper in `src/lib/checkout.ts` hands the URL to the system browser on
+native, which is the branch that has not been exercised on a device.
+
+### ⚠️ Deploy ordering: the backend gate breaks the *old* frontend
+
+`/api/predict/premium` now answers `401` without a bearer token. Any deployed
+frontend built **before** this change sends no token, so its premium panel will
+report a failure instead of showing the password form it used to. That is intended
+— the old form never protected anything — but it means **deploy the new frontend
+and the new backend together.** Backend first is safe only in the sense that the
+free dashboard, the ledger and the backtest keep working throughout; the premium
+panel is down until the matching frontend build is live.
+
+The same applies to the free tier, so it is worth stating: `/`, `/api/health`,
+`/api/latest-draws`, `/api/predict/basic`, `/api/predict/advanced`, `/api/backtest`
+and `/api/checkout/plans` remain public and unaffected.
+
 ## Rollback
 
 - **Render:** the service's **Events** list keeps every deploy; "Redeploy" an
@@ -453,7 +706,12 @@ curl -s "https://superheng-api.onrender.com/api/predict/basic?limit=100" | head 
   policy, and `curl`, bots and the native app ignore it. Anyone who learns the
   URL can call every endpoint and consume the free instance's capacity. Fine for
   a closed beta; an `X-API-Key` check (plus rate limiting) is the next step
-  before the URL is publicised.
+  before the URL is publicised. The two exceptions are deliberate and stronger
+  than a password: `/api/predict/premium` requires a bearer token whose account
+  holds the entitlement, and `POST /api/webhook/stripe` cannot take a token at
+  all — Stripe is a server — so it is authenticated by an HMAC signature over the
+  raw request body, which is the only thing standing in front of the one function
+  that writes `subscription_tier`.
 - **CORS is wide open on purpose and `CORS_ALLOW_CREDENTIALS=true`** (see
   Step 3). Both are beta-only and must be reverted before launch, and before any
   cookie-based login is introduced.
