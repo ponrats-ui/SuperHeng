@@ -2006,6 +2006,38 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
 // ---------------------------------------------------------------------------
 
 /**
+ * Per-attempt budget for the liveness probe. Short on purpose: the probe is a
+ * question about a service that is already suspected of being asleep, so an
+ * unanswered one is answered.
+ */
+const HEALTH_PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * Is the service awake right now?
+ *
+ * One attempt, never retried, never thrown. `request` already spends up to a
+ * minute retrying a cold start, and that is the right budget for a screen that
+ * wants the data — but it is also *bounded*, and a free Render instance often
+ * takes longer than a minute to come back from a 502. This probe is how a screen
+ * that has already given up notices the recovery: it asks once, cheaply, on a
+ * slow interval, and the caller refetches only when the answer is yes.
+ *
+ * Deliberately unauthenticated and tiny: `/health` touches no database and no
+ * model, so polling it costs the instance nothing and says nothing about who is
+ * asking.
+ */
+export async function pingHealth(): Promise<boolean> {
+  try {
+    await attempt('/health', HEALTH_PROBE_TIMEOUT_MS);
+    return true;
+  } catch {
+    // A failure here is the ordinary case, not an exception: it means "still
+    // asleep". The caller's next tick asks again.
+    return false;
+  }
+}
+
+/**
  * Frequency + Markov picks for both 2-digit positions.
  *
  * Resolves for degraded payloads too: an empty or thin ledger is a successful

@@ -26,6 +26,7 @@ import {
   BASE_URL,
   getBasicPredictions,
   isApiError,
+  pingHealth,
   toRankings,
   type BasicPredictions,
   type ChannelKey,
@@ -54,6 +55,17 @@ type ConnectionState = 'live' | 'connecting' | 'waking' | 'offline';
  * effect depend on the language and refetch the whole payload on a toggle.
  */
 type LoadError = { kind: 'api'; message: string } | { kind: 'unknown' };
+
+/**
+ * How often a failed screen asks whether the server has come back.
+ *
+ * Slow enough to be invisible on a free-tier instance that is genuinely down
+ * (three requests a minute against a `/health` route that touches nothing), fast
+ * enough that a recovery is noticed while the reader is still looking at the
+ * screen. Tied to no other interval on purpose: this is a recovery clock, not a
+ * refresh clock.
+ */
+const OFFLINE_RECHECK_MS = 20_000;
 
 /** Badge wording per state, as keys — the wording itself is language-dependent. */
 const CONNECTION_LABEL: Record<ConnectionState, TranslationKey> = {
@@ -174,6 +186,36 @@ export default function DashboardScreen() {
     setWaking(false);
     setReloadKey((key) => key + 1);
   }, []);
+
+  /**
+   * Recovery after the wake budget is spent.
+   *
+   * The transport retries a cold start for up to a minute, which is the right
+   * ceiling for one screen — but it is a ceiling, and a free Render instance
+   * often takes longer than that to come back. Observed on the deployed beta: a
+   * 502 window that outlasted the budget left the badge on OFFLINE with a working
+   * API behind it, because the request had already given up and nothing asked
+   * again. This effect is the thing that asks: while a failure is on screen, it
+   * probes `/health` on a slow interval and reloads the moment the instance
+   * answers. It writes no state on failure, so a backend that is still down
+   * costs nothing but a background request.
+   */
+  useEffect(() => {
+    if (error === null) return;
+
+    let cancelled = false;
+    const timer = setInterval(() => {
+      void pingHealth().then((awake) => {
+        if (cancelled || !awake) return;
+        retry();
+      });
+    }, OFFLINE_RECHECK_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [error, retry]);
 
   // The API may declare the next draw date; Day 3's payload does not, so fall
   // back to the locally computed GLO schedule (1st/16th, verified against GLO).
