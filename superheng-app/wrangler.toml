@@ -55,3 +55,29 @@ compatibility_date = "2026-10-13"
 # is exactly why no secret belongs in this table.
 [vars]
 EXPO_PUBLIC_API_URL = "https://superheng-api.onrender.com"
+
+# Accounts (premium subscriptions).
+#
+# Without these two the hosted build boots fine but cannot sign anyone in:
+# `src/lib/supabase.ts` bakes both values in at build time and reports
+# `isAuthConfigured = false` when they are missing, so the Premium panel told
+# every visitor that accounts were not configured — while the same two values
+# worked perfectly in every local build, because `.env` supplied them to Expo
+# but nothing supplied them to the Pages build. That is the failure mode this
+# table exists to prevent, and DEPLOY.md step 6 says the same thing.
+#
+# The anon key is **meant** to be public. Expo inlines it into the client bundle
+# exactly like EXPO_PUBLIC_API_URL, and row-level security
+# (`backend/schema_profiles.sql`) is what protects the data behind it — see
+# `.env.example`, which says this at length.
+#
+# The `service_role` key must NEVER appear here: it bypasses RLS, and the whole
+# design of the premium gate is that the API reads an entitlement through RLS
+# with the *user's own* token and so cannot be tricked into another user's row.
+# If this file is ever edited to hold one, that guarantee is gone.
+#
+# There is deliberately no EXPO_PUBLIC_STRIPE_* variable. The app redirects to
+# Stripe's hosted Checkout and never loads Stripe.js, so no key belongs in the
+# client at all — `.env.example` explains why at length.
+EXPO_PUBLIC_SUPABASE_URL = "https://eiukzhtbslgoennqpvix.supabase.co"
+EXPO_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpdWt6aHRic2xnb2VubnFwdml4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE4Mjc4ODEsImV4cCI6MjEwNzQwMzg4MX0.abhhWIr5sz0EJ_fny3z4bswe1KYhXZqET9t8BJkuqQo"

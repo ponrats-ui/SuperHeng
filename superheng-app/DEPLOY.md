@@ -473,16 +473,25 @@ ledger's fences — which are the ones worth actually running before taking mone
 
 ### 6.2 Point the frontend at the project
 
-Add two variables to the Pages build (Pages → Settings → Environment variables),
-and to `superheng-app/.env` for local development:
+Add two variables to [`wrangler.toml`](wrangler.toml) → `[vars]`, and to
+`superheng-app/.env` for local development:
 
 ```
 EXPO_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=<the publishable / anon key>
 ```
 
-`EXPO_PUBLIC_*` is inlined at **build** time — changing these in the dashboard
-does nothing until the next build — and they are readable in the shipped bundle.
+**`[vars]`, not the dashboard.** This step previously said "Pages → Settings →
+Environment variables", and that advice does not work: with a `wrangler.toml` in
+the build root Cloudflare reads the Pages build configuration from it, and a
+variable added in the dashboard is a *runtime* variable that `npm run build`
+never sees. Measured, not assumed — the production bundle shipped with no
+Supabase values at all and the Premium panel answered "not configured" to every
+visitor, while the same two values worked in every local build. `wrangler.toml`
+now carries them, next to `EXPO_PUBLIC_API_URL`, with the reasoning in a comment.
+
+`EXPO_PUBLIC_*` is inlined at **build** time — changing these does nothing until
+the next build — and they are readable in the shipped bundle.
 That is correct here: the publishable key is meant to be public and row-level
 security is what protects the data. **Never** put the `service_role` key in either
 place; it bypasses RLS and belongs only in `backend/.env` for ingestion.
