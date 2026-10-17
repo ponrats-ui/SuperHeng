@@ -733,6 +733,32 @@ export const en = {
     'Frequency {lift}× baseline · seen {count} of {expected} expected',
   'performance.evidenceMarkov': 'Markov {lift}× baseline',
   'performance.evidenceUniform': 'No edge over the uniform rate',
+  // The verified highlight above the list. It is filled from the replay, never written
+  // by hand, and it names the weakest claim it can make (top five) as exactly that.
+  'performance.highlightsTitle': '🔥 Latest verified highlight',
+  'performance.highlightsExactBody':
+    'The draw came out {number} — the exact code the model ranked first.',
+  'performance.highlightsTop5Body':
+    'The draw came out {number}, and it was one of the five codes the model shortlisted.',
+  'performance.highlightsChannel': 'Channel: {channel}',
+  'performance.highlightsRate':
+    'Top-five catches: {hits} of {draws} draws ({rate}) · uniform baseline {baseline}',
+  'performance.highlightsP': 'p = {p}',
+  'performance.highlightsSignificant': 'significant against chance',
+  'performance.highlightsNotSignificant': 'not yet significant against chance',
+  'performance.highlightsReplay':
+    'Walk-forward replay of the same ledger as the list below, not a stored forecast. ' +
+    'Past results do not predict the next draw.',
+  'performance.highlightsEmpty':
+    'No scored signal caught a draw in the last {draws} draws, across the ledgers we ' +
+    'replay.',
+  'performance.highlightsEmptyBody':
+    'This card fills in only when a published result matches a signal we can replay — ' +
+    'the #1 pick, or the top five. Nothing in it is written by hand.',
+  'performance.highlightsFailed':
+    'Highlights are unavailable right now: the replay ledgers did not answer.',
+  'performance.sourceTop5': 'from Top 5',
+  'performance.sourceTop1': 'from AI #1',
   'performance.aiPredicted': 'AI predicted',
   'performance.actualResult': 'Actual result',
   'performance.hit': 'HIT',

@@ -603,6 +603,24 @@ export const th: Record<TranslationKey, string> = {
   'performance.evidenceFrequency': 'ความถี่ {lift}× ค่าฐาน · ออก {count} จากที่คาด {expected}',
   'performance.evidenceMarkov': 'Markov {lift}× ค่าฐาน',
   'performance.evidenceUniform': 'ไม่ต่างจากอัตราฐาน',
+  // การ์ดผลงานเด่น: เติมจากผล replay จริงเท่านั้น และระบุให้ชัดว่าเป็นการ “ติด 5 อันดับ”
+  // ซึ่งเป็นข้อกล่าวอ้างที่อ่อนกว่า “ทายถูก”
+  'performance.highlightsTitle': '🔥 ผลงานเด่นที่ตรวจสอบได้ล่าสุด',
+  'performance.highlightsExactBody': 'งวดนี้ออกเลข {number} ตรงกับเลขอันดับ 1 ที่โมเดลเลือก',
+  'performance.highlightsTop5Body': 'งวดนี้ออกเลข {number} และอยู่ใน 5 อันดับแรกที่โมเดลจัดอันดับไว้',
+  'performance.highlightsChannel': 'ช่อง: {channel}',
+  'performance.highlightsRate': 'ติด 5 อันดับ {hits} จาก {draws} งวด ({rate}) · ฐานสุ่ม {baseline}',
+  'performance.highlightsP': 'p = {p}',
+  'performance.highlightsSignificant': 'ต่างจากโอกาสสุ่มอย่างมีนัยสำคัญ',
+  'performance.highlightsNotSignificant': 'ยังไม่ต่างจากโอกาสสุ่มอย่างมีนัยสำคัญ',
+  'performance.highlightsReplay':
+    'คำนวณย้อนหลังด้วยข้อมูลชุดเดียวกับรายการด้านล่าง ไม่ใช่บันทึกคำทำนายที่เก็บไว้ ผลในอดีตไม่ทำนายงวดถัดไป',
+  'performance.highlightsEmpty': 'ยังไม่มีสัญญาณใดจับเลขที่ออกได้ใน {draws} งวดล่าสุดของทุกตลาดที่เราตรวจ',
+  'performance.highlightsEmptyBody':
+    'การ์ดนี้จะขึ้นเมื่อผลที่ประกาศตรงกับสัญญาณที่เราคำนวณย้อนกลับได้เท่านั้น คือเลขอันดับ 1 หรือ 5 อันดับแรก ไม่มีตัวเลขใดถูกเขียนขึ้นเอง',
+  'performance.highlightsFailed': 'ยังดึงผลงานเด่นไม่ได้ในตอนนี้ ระบบคำนวณย้อนหลังไม่ตอบสนอง',
+  'performance.sourceTop5': 'จาก Top 5',
+  'performance.sourceTop1': 'จาก AI อันดับ 1',
   'performance.aiPredicted': 'AI ทำนาย',
   'performance.actualResult': 'ผลออกรางวัล',
   'performance.hit': 'ถูกรางวัล',

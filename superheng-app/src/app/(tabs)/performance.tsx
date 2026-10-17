@@ -13,6 +13,7 @@ import {
   type BacktestChannel,
   type BacktestChannelReport,
   type BacktestTimelinePoint,
+  type LotteryType,
 } from '@/lib/api';
 import { apiErrorText, type ApiErrorText } from '@/lib/api-error';
 import { formatP, percent } from '@/lib/backtest-format';
@@ -40,6 +41,27 @@ const HISTORY_DRAWS = 6;
  * than leaving the reader to assume.
  */
 const HISTORY_CHANNELS: readonly BacktestChannel[] = ['bottom', 'top'];
+
+/**
+ * How much history the highlights card searches, and in which ledgers.
+ *
+ * The card answers "is there a *verified* win to lead with?" and the answer has to
+ * outlive the six-draw window above it: a real top-five catch from three weeks ago is
+ * still a real catch. Thirty draws is the window the Backtest tab publishes rates over,
+ * so the card and the tab cannot quote different records for the same ledger. It is
+ * also the window in which the server's p-value is computed, which is why the card can
+ * put the p-value beside the win instead of leaving it implied.
+ */
+const HIGHLIGHT_DRAWS = 30;
+
+/** The ledgers the highlights card looks through, in display order. */
+const HIGHLIGHT_TYPES: readonly LotteryType[] = ['thai', 'laos', 'vietnam'];
+
+const COUNTRY_LABEL_KEYS: Record<LotteryType, TranslationKey> = {
+  thai: 'premium.lotteryThai',
+  laos: 'premium.lotteryLaos',
+  vietnam: 'premium.lotteryVietnam',
+};
 
 /**
  * The two prizes this ledger can actually verify, and no others.
@@ -105,6 +127,38 @@ type LatestState =
   | { status: 'empty' }
   | { status: 'failed' };
 
+/**
+ * One draw the service can prove a signal caught.
+ *
+ * `kind` is the strength of the claim, not decoration: `exact` means the number the
+ * model ranked first was the number drawn, `top5` means it sat somewhere in the five
+ * codes the model shortlisted. The two are rendered differently because they are
+ * different achievements — a top-five catch against a 5% baseline is a real result,
+ * but it is not a hit on the ranking's first line.
+ *
+ * The rate fields come from the same payload as the winning draw, never from a
+ * favourite window picked after the fact: `hits / picks` and the p-value are the
+ * server's own summary of the ledger this draw belongs to.
+ */
+type Highlight = {
+  lotteryType: LotteryType;
+  channel: BacktestChannel;
+  drawDate: string;
+  actual: string;
+  kind: 'exact' | 'top5';
+  picks: number;
+  hits: number;
+  percent: number | null;
+  baseline: number | null;
+  pValue: number | null;
+  significant: boolean;
+};
+
+type HighlightState =
+  | { status: 'loading' }
+  | { status: 'ready'; highlight: Highlight | null }
+  | { status: 'failed' };
+
 /** The channel this card will show, preferring the bottom two. */
 function historyChannel(report: Backtest): BacktestChannelReport | undefined {
   return HISTORY_CHANNELS.map((key) => report.channels[key]).find((row) => row?.available);
@@ -119,6 +173,66 @@ const CHANNEL_LABEL_KEYS: Record<BacktestChannel, TranslationKey> = {
   bottom: 'performance.channelBottom',
   top: 'performance.channelTop',
 };
+
+/**
+ * The newest draw in one ledger that any scored signal actually caught, if any.
+ *
+ * Only signals the server scores per draw are considered. The frequency and Markov
+ * evidence in `/api/predict/basic` describes the *upcoming* draw and is not stored, so
+ * it cannot be checked against a result that already happened; claiming a past draw was
+ * "a Heatmap hit" would mean recomputing the heatmap after seeing the number and then
+ * calling that a prediction. Top-five membership and the #1 pick are the two claims the
+ * replay genuinely holds.
+ */
+function buildHighlight(lotteryType: LotteryType, report: Backtest): Highlight | null {
+  let best: Highlight | null = null;
+
+  for (const channel of HISTORY_CHANNELS) {
+    const block = report.channels[channel];
+    const timeline = block?.timeline;
+    if (!block?.available || !timeline?.length) continue;
+
+    // The timeline is oldest-first, so the first hit walking backwards is the latest.
+    const point = [...timeline].reverse().find((row) => row.exact_hit || row.top_5_hit);
+    if (!point) continue;
+
+    const candidate: Highlight = {
+      lotteryType,
+      channel,
+      drawDate: point.draw_date,
+      actual: point.actual,
+      kind: point.exact_hit ? 'exact' : 'top5',
+      picks: timeline.length,
+      hits: block.ai?.top_5_hits ?? 0,
+      percent: block.ai?.top_5_hit_rate_percent ?? null,
+      baseline: block.uniform?.top_5_hit_rate_percent ?? null,
+      pValue: block.skill?.top_5_p_value ?? null,
+      significant: block.skill?.top_5_significant === true,
+    };
+
+    if (
+      !best ||
+      candidate.drawDate > best.drawDate ||
+      (candidate.drawDate === best.drawDate &&
+        candidate.kind === 'exact' &&
+        best.kind !== 'exact')
+    ) {
+      best = candidate;
+    }
+  }
+
+  return best;
+}
+
+/** The most recent verified win across the ledgers, preferring a stronger claim. */
+function newestHighlight(highlights: Highlight[]): Highlight | null {
+  const ranked = [...highlights].sort((a, b) => {
+    if (a.drawDate !== b.drawDate) return a.drawDate < b.drawDate ? 1 : -1;
+    if (a.kind !== b.kind) return a.kind === 'exact' ? -1 : 1;
+    return 0;
+  });
+  return ranked[0] ?? null;
+}
 
 /**
  * The single strongest real signal behind a pick.
@@ -203,6 +317,7 @@ export default function PerformanceScreen() {
   const [checked, setChecked] = useState(false);
   const [history, setHistory] = useState<HistoryState>({ status: 'loading' });
   const [latest, setLatest] = useState<LatestState>({ status: 'loading' });
+  const [highlights, setHighlights] = useState<HighlightState>({ status: 'loading' });
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -221,6 +336,30 @@ export default function PerformanceScreen() {
         setHistory({ status: 'failed', text: apiErrorText(caught) });
       }
     );
+
+    // The highlights scan the three ledgers for a win the replay can prove. It is its own
+    // request pair because it needs a wider window than the six-draw list, and it is
+    // allowed to fail on its own: a slow ledger must not take the history card down.
+    void Promise.allSettled(
+      HIGHLIGHT_TYPES.map((type) => getBacktest(type, HIGHLIGHT_DRAWS))
+    ).then((results) => {
+      if (cancelled) return;
+      const found: Highlight[] = [];
+      let answered = 0;
+      results.forEach((result, index) => {
+        if (result.status !== 'fulfilled') return;
+        answered += 1;
+        const highlight = buildHighlight(HIGHLIGHT_TYPES[index], result.value);
+        if (highlight) found.push(highlight);
+      });
+      // No ledger answered at all is a failure, not an empty record — the card must not
+      // say "no wins" when it is the network that is missing.
+      setHighlights(
+        answered === 0
+          ? { status: 'failed' }
+          : { status: 'ready', highlight: newestHighlight(found) }
+      );
+    });
 
     void getBasicPredictions().then(
       (payload) => {
@@ -275,6 +414,7 @@ export default function PerformanceScreen() {
   function retry() {
     setHistory({ status: 'loading' });
     setLatest({ status: 'loading' });
+    setHighlights({ status: 'loading' });
     setReloadKey((value) => value + 1);
   }
 
@@ -494,6 +634,20 @@ export default function PerformanceScreen() {
         ) : null}
 
         {/*
+          The verified highlight, above the full list. Every number in it comes from the
+          replay the rows below are built from — there is no hand-written win here, and
+          when the ledgers have none the card says so instead of inventing one.
+        */}
+        {history.status === 'ready' ? (
+          <SuccessHighlights
+            state={highlights}
+            drawsSearched={HIGHLIGHT_DRAWS}
+            language={language}
+            t={t}
+          />
+        ) : null}
+
+        {/*
           The draw that just happened, promoted out of the list: it is the one a reader
           opens this screen for, and "AI ทำนาย vs ผลออกรางวัล" side by side is the whole
           question. The verdict below it is the server's (`exact_hit` / `top_5_hit`), not
@@ -534,6 +688,142 @@ export default function PerformanceScreen() {
         </ThemedText>
       </Card>
     </PageScaffold>
+  );
+}
+
+/**
+ * The verified highlight above the list.
+ *
+ * It is built from the replay the rows below it come from, so the number in it can be
+ * checked by scrolling: same ledger, same baselines, same p-value rule. That is the
+ * whole point of putting it here rather than in a marketing block — the claim and the
+ * evidence sit an inch apart. When no ledger has a catch in the window the card states
+ * the count instead of disappearing, because a silent card reads as "nothing to see"
+ * while an empty one reads as "we checked".
+ */
+function SuccessHighlights({
+  state,
+  drawsSearched,
+  language,
+  t,
+}: {
+  state: HighlightState;
+  drawsSearched: number;
+  language: Language;
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string;
+}) {
+  const { colors } = useAppTheme();
+
+  if (state.status === 'loading') return null;
+
+  if (state.status === 'failed') {
+    return (
+      <View style={[styles.highlight, { borderColor: colors.cardBorder, backgroundColor: colors.backgroundElement }]}>
+        <ThemedText type="small" themeColor="textMuted" style={styles.highlightLine}>
+          {t('performance.highlightsFailed')}
+        </ThemedText>
+      </View>
+    );
+  }
+
+  const highlight = state.highlight;
+  if (!highlight) {
+    return (
+      <View style={[styles.highlight, { borderColor: colors.cardBorder, backgroundColor: colors.backgroundElement }]}>
+        <ThemedText type="smallBold" style={styles.highlightTitle}>
+          {t('performance.highlightsTitle')}
+        </ThemedText>
+        <ThemedText type="small" themeColor="textSecondary" style={styles.highlightLine}>
+          {t('performance.highlightsEmpty', { draws: drawsSearched })}
+        </ThemedText>
+        <ThemedText type="small" themeColor="textMuted" style={styles.highlightFootnote}>
+          {t('performance.highlightsEmptyBody')}
+        </ThemedText>
+      </View>
+    );
+  }
+
+  // Green only for the number the model ranked first; gold for a top-five catch, which is
+  // a weaker claim and is labelled as one.
+  const tone = highlight.kind === 'exact' ? colors.success : colors.gold;
+
+  return (
+    <View style={[styles.highlight, { borderColor: `${tone}59`, backgroundColor: `${tone}12` }]}>
+      <ThemedText type="smallBold" style={[styles.highlightTitle, { color: tone }]}>
+        {t('performance.highlightsTitle')}
+      </ThemedText>
+
+      <View style={styles.highlightBody}>
+        <View
+          style={[
+            styles.highlightNumber,
+            { borderColor: `${tone}80`, backgroundColor: `${tone}1F` },
+          ]}>
+          <ThemedText
+            style={[
+              styles.highlightDigits,
+              { color: tone, textShadowColor: `${tone}99`, textShadowRadius: 14 },
+            ]}>
+            {highlight.actual}
+          </ThemedText>
+        </View>
+
+        <View style={styles.highlightText}>
+          <View style={styles.highlightTagRow}>
+            <View style={[styles.highlightTag, { backgroundColor: `${tone}26` }]}>
+              <ThemedText type="small" style={[styles.highlightTagText, { color: tone }]}>
+                {t(
+                  highlight.kind === 'exact'
+                    ? 'performance.sourceTop1'
+                    : 'performance.sourceTop5'
+                )}
+              </ThemedText>
+            </View>
+            <ThemedText type="small" themeColor="textMuted" style={styles.highlightMeta}>
+              {t(COUNTRY_LABEL_KEYS[highlight.lotteryType])} ·{' '}
+              {formatLocalizedDate(highlight.drawDate, language)}
+            </ThemedText>
+          </View>
+
+          <ThemedText type="small" themeColor="textSecondary" style={styles.highlightLine}>
+            {t(
+              highlight.kind === 'exact'
+                ? 'performance.highlightsExactBody'
+                : 'performance.highlightsTop5Body',
+              { number: highlight.actual }
+            )}
+          </ThemedText>
+
+          <ThemedText type="small" themeColor="textMuted" style={styles.highlightLine}>
+            {t('performance.highlightsChannel', {
+              channel: t(CHANNEL_LABEL_KEYS[highlight.channel]),
+            })}
+          </ThemedText>
+        </View>
+      </View>
+
+      <ThemedText type="small" themeColor="textSecondary" style={styles.highlightStats}>
+        {t('performance.highlightsRate', {
+          hits: highlight.hits,
+          draws: highlight.picks,
+          rate: percent(highlight.percent),
+          baseline: percent(highlight.baseline),
+        })}
+      </ThemedText>
+      <ThemedText type="small" themeColor="textMuted" style={styles.highlightStats}>
+        {highlight.pValue === null
+          ? ''
+          : `${t('performance.highlightsP', { p: formatP(highlight.pValue) })} · `}
+        {t(
+          highlight.significant
+            ? 'performance.highlightsSignificant'
+            : 'performance.highlightsNotSignificant'
+        )}
+      </ThemedText>
+      <ThemedText type="small" themeColor="textMuted" style={styles.highlightFootnote}>
+        {t('performance.highlightsReplay')}
+      </ThemedText>
+    </View>
   );
 }
 
@@ -617,6 +907,18 @@ function LatestDrawComparison({
               {point.actual}
             </ThemedText>
           </View>
+          {point.exact_hit || point.top_5_hit ? (
+            <ThemedText
+              type="small"
+              style={[
+                styles.latestSource,
+                { color: point.exact_hit ? colors.success : colors.gold },
+              ]}>
+              {t(
+                point.exact_hit ? 'performance.sourceTop1' : 'performance.sourceTop5'
+              )}
+            </ThemedText>
+          ) : null}
         </View>
       </View>
     </View>
@@ -683,6 +985,8 @@ function HistoryRow({
 }) {
   const { colors } = useAppTheme();
   const verdict = verdictOf(point, colors);
+  const caught = point.exact_hit === 1 || point.top_5_hit === 1;
+  const caughtTone = point.exact_hit ? colors.success : colors.gold;
 
   return (
     <View style={[styles.historyRow, { borderTopColor: colors.cardBorder }]}>
@@ -711,7 +1015,15 @@ function HistoryRow({
         <ThemedText type="small" themeColor="textMuted" style={styles.actualLabel}>
           {t('performance.actual')}
         </ThemedText>
-        <ThemedText type="smallBold" style={styles.actualValue}>
+        {/*
+          A caught draw puts the actual number in the accent colour and names the signal
+          underneath: the number on the right is the one a signal found, so this is the
+          honest place for "which signal" — attaching the tag to the pick instead would
+          claim the pick came from a list it is only one line of.
+        */}
+        <ThemedText
+          type="smallBold"
+          style={[styles.actualValue, caught && { color: caughtTone }]}>
           {point.actual}
         </ThemedText>
         <View style={[styles.hitBadge, { backgroundColor: `${verdict.color}22` }]}>
@@ -719,6 +1031,13 @@ function HistoryRow({
             {t(verdict.labelKey)}
           </ThemedText>
         </View>
+        {caught ? (
+          <ThemedText type="small" style={[styles.sourceTagText, { color: caughtTone }]}>
+            {t(
+              point.exact_hit ? 'performance.sourceTop1' : 'performance.sourceTop5'
+            )}
+          </ThemedText>
+        ) : null}
       </View>
     </View>
   );
@@ -904,6 +1223,86 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 10,
     lineHeight: 15,
+  },
+  highlight: {
+    marginTop: Spacing.three,
+    padding: Spacing.three,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: Spacing.one,
+  },
+  highlightTitle: {
+    fontSize: 12,
+    letterSpacing: 0.4,
+  },
+  highlightBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+    marginTop: Spacing.two,
+  },
+  highlightNumber: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    minWidth: 78,
+  },
+  highlightDigits: {
+    fontSize: 34,
+    lineHeight: 40,
+    fontWeight: '800',
+    letterSpacing: 3,
+    fontVariant: ['tabular-nums'],
+  },
+  highlightText: {
+    flex: 1,
+    gap: 3,
+  },
+  highlightTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+  },
+  highlightTag: {
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+  },
+  highlightTagText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  highlightMeta: {
+    fontSize: 10,
+  },
+  highlightLine: {
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  highlightStats: {
+    fontSize: 10,
+    lineHeight: 15,
+    marginTop: Spacing.one,
+    fontVariant: ['tabular-nums'],
+  },
+  highlightFootnote: {
+    fontSize: 9,
+    lineHeight: 14,
+    marginTop: Spacing.one,
+  },
+  latestSource: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  sourceTagText: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   latestCard: {
     marginTop: Spacing.three,
