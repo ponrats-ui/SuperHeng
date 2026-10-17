@@ -103,6 +103,40 @@ def test_health_reports_the_models_as_available(client: TestClient):
     assert payload["models"]["endpoints"]["premium"] == "/api/predict/premium"
 
 
+# ---------------------------------------------------------------------------
+# Liveness (`/health`) — the route uptime monitors are pointed at
+# ---------------------------------------------------------------------------
+#
+# These two tests pin the reason `/health` is a separate route from `/api/health`,
+# which is the distinction an operator has to get right: a monitor pointed at the
+# diagnostic route would alarm on a degraded dependency that the service is
+# designed to keep serving through.
+
+
+def test_health_is_a_minimal_public_liveness_probe(client: TestClient):
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    # The exact payload, not merely a 200: a monitor is often configured from the
+    # body ("contains `ok`"), and growing this response is how that quietly stops
+    # matching what anybody set up.
+    assert response.json() == {"status": "ok"}
+
+
+def test_health_answers_without_reading_any_dependency(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    """A broken Supabase client must not be able to make liveness fail."""
+
+    class Bomb:
+        """Raises on any use — a regression that reads it fails loudly here."""
+
+        def __getattr__(self, name: str) -> object:  # pragma: no cover - regression guard
+            raise AssertionError(f"/health touched the Supabase client ({name})")
+
+    monkeypatch.setattr(main, "supabase_client", Bomb())
+
+    assert client.get("/health").status_code == 200
+
+
 def test_response_carries_the_documented_top_level_fields(client: TestClient):
     payload = advanced(client)
 

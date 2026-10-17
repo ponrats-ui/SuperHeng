@@ -13,6 +13,8 @@ then open http://127.0.0.1:8000/docs for the OpenAPI UI.
 Endpoints
 ---------
 ``GET /``                  liveness probe (exact payload, public)
+``GET /health``            liveness probe for uptime monitors (no dependency
+                          checks — see the note above the handler)
 ``GET /api/health``        service + dependency status
 ``GET /api/latest-draws``  the 10 most recent rows from ``lottery_draws``
 ``GET /api/predict/basic`` Frequency + Markov Chain -> ranked 2-digit picks
@@ -657,6 +659,35 @@ def require_premium_user(
 async def root() -> dict[str, str]:
     """Liveness probe. Public — never require an API key to read this."""
     return {"status": "SuperHeng API is running", "version": "1.0"}
+
+
+# NOTE ON THE NAME: there are three liveness-shaped routes and the split is
+# deliberate, not accidental duplication.
+#
+#   ``/``           the original probe, kept because the app and the deploy notes
+#                   already reference it and its payload is asserted by tests.
+#   ``/health``     the conventional path an external uptime monitor is pointed at.
+#   ``/api/health`` the *diagnostic* one: it reports dependency and model status,
+#                   so it reads the configuration and can therefore be affected by
+#                   it. A monitor must not use it.
+#
+# That last distinction is the reason this route exists rather than an extra word
+# in the docs. A monitor checks "is this process alive" and treats a non-200 as an
+# outage; ``/api/health`` answers 200 while reporting ``supabase: not_configured``,
+# and a future change that made it 503 on a degraded dependency would turn every
+# monitor into a page-triggering alarm for a condition the service is designed to
+# survive. ``/health`` computes nothing, touches no dependency, and cannot fail for
+# a reason other than the process being gone — which is exactly the check.
+@app.get("/health", tags=["meta"], summary="Liveness probe for uptime monitors")
+async def liveness() -> dict[str, str]:
+    """Return 200 with no dependency checks. Public, and cheap enough to poll.
+
+    Point an uptime monitor here (every 10 minutes is enough to keep a free
+    Render instance from spinning down). Nothing in this handler reads Supabase,
+    the models, or the request body, so an unhealthy *dependency* can never make
+    it answer non-200.
+    """
+    return {"status": "ok"}
 
 
 @app.get("/api/health", tags=["meta"], summary="Service and dependency status")

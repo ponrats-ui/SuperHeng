@@ -74,6 +74,59 @@ export const WAKE_DEADLINE_MS = 75_000;
 export const RETRY_BACKOFF_MS = [1_000, 2_000, 3_000, 5_000, 8_000] as const;
 
 /**
+ * How long the transport keeps retrying a network failure before it reports one.
+ *
+ * A minute, matching the sleep/wake cycle it exists to cover, and deliberately
+ * shorter than `WAKE_DEADLINE_MS`: see `NETWORK_RETRY_INTERVAL_MS` for why this
+ * failure shape gets its own budget rather than sharing the hung-attempt one.
+ */
+export const NETWORK_DEADLINE_MS = 60_000;
+
+/**
+ * Fixed pause between retries of a network failure, as opposed to the rising
+ * backoff used for a hung attempt.
+ *
+ * The two failure shapes need different treatment. A hung attempt is the proxy
+ * parking the connection while an instance boots, and it resolves on its own
+ * timeline, so a rising backoff wastes nothing. A *network* failure is what a
+ * browser reports when the response never arrives *at all* — a 502 from Render's
+ * proxy carries no `Access-Control-Allow-Origin` header, so the browser blocks it
+ * and `fetch` rejects with a bare `TypeError`, indistinguishable from a refused
+ * connection. There is no status to read and no progress to observe, so the only
+ * thing to do is ask again at an interval that neither hammers the service nor
+ * leaves the reader staring at a stopped screen: five seconds.
+ */
+export const NETWORK_RETRY_INTERVAL_MS = 5_000;
+
+/**
+ * Hosts where a network failure means "nothing is listening", not "the hosted
+ * service is cold".
+ *
+ * This is the discriminator that makes retrying network failures safe. In a
+ * browser the two cases are the same `TypeError`, but they are not the same
+ * situation: against a deployed API a refusal almost always means a proxy 502
+ * during a cold start and is worth waiting out, while against `127.0.0.1` — local
+ * development with `uvicorn` not yet started — it means the developer has no
+ * backend, and retrying for a minute would hide that behind a spinner.
+ *
+ * `10.0.2.2` is the Android emulator's alias for the developer's own machine, so
+ * it belongs in this list for the same reason as the loopback addresses.
+ */
+const NO_RETRY_HOSTS = ['127.0.0.1', 'localhost', '[::1]', '::1', '10.0.2.2'];
+
+/** Whether `BASE_URL` points at the machine running the app rather than at a host. */
+function isLocalTarget(): boolean {
+  try {
+    // `URL` needs a scheme; BASE_URL always has one, but a malformed value here
+    // must not throw inside the retry decision.
+    const { hostname } = new URL(BASE_URL);
+    return NO_RETRY_HOSTS.includes(hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Per-attempt budget for `/api/backtest`, which is the one endpoint that
  * legitimately computes for seconds rather than milliseconds.
  *
@@ -1773,7 +1826,19 @@ async function attempt(
             `${Math.round(timeoutMs / 1000)}s.`
         );
       }
-      throw error;
+      // `fetch` rejects with a bare `TypeError` for anything it cannot turn into
+      // a response: a refused connection, DNS failure, or a response the browser
+      // blocked because the proxy returned a 502 with no CORS header — which is
+      // the normal shape of a cold Render instance. Classified here rather than
+      // left raw for two reasons: `isRetryable` can only recognise an `ApiError`,
+      // so an unclassified rejection was never retried and a waking server was
+      // reported as offline; and an unclassified error reaches the reader as
+      // "unexpected", which blames the app for the network.
+      throw new ApiError(
+        'network',
+        `The connection to ${BASE_URL} failed before a response arrived ` +
+          `(${error instanceof Error ? error.message : String(error)}).`
+      );
     }
 
     let text = '';
@@ -1831,25 +1896,38 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Whether a failure is worth retrying. Only two shapes qualify, and neither is
- * an answer from this application:
+ * Whether a failure is worth retrying. Only three shapes qualify, and none is an
+ * answer from this application:
  *
  * - `timeout` — the request hung. Render's proxy parks the connection while a
  *   spun-down instance boots, so silence *is* what waking looks like from here.
  * - `502`/`503`/`504` — the proxy answered because the app could not: still
  *   booting, or being swapped out mid-deploy.
+ * - `network` — the response never arrived in a readable form, which in a browser
+ *   is the *usual* face of a cold start rather than an exception: a 502 from the
+ *   proxy is served without CORS headers, so the browser rejects the fetch before
+ *   any status can be read. Not retried against a local address — see
+ *   `NO_RETRY_HOSTS`.
  *
- * Everything else fails immediately on purpose. A refused connection (nothing
- * listening — local dev with no backend running) and a 4xx/5xx from FastAPI
- * itself are real answers, and retrying those for 75s would only postpone the
- * error card.
+ * Everything else fails immediately on purpose. A 4xx/5xx from FastAPI itself is a
+ * real answer, and retrying it for a minute would only postpone the error card.
  */
 function isRetryable(error: unknown): boolean {
   if (!isApiError(error)) return false;
   if (error.kind === 'timeout') return true;
+  if (error.kind === 'network') return !isLocalTarget();
   return (
     error.kind === 'http' && error.status !== undefined && error.status >= 502 && error.status <= 504
   );
+}
+
+/**
+ * Pause before the next attempt, per failure shape: fixed for a network failure,
+ * the rising table for everything else.
+ */
+function retryDelayMs(kind: ApiErrorKind | null, attemptNumber: number): number {
+  if (kind === 'network') return NETWORK_RETRY_INTERVAL_MS;
+  return RETRY_BACKOFF_MS[Math.min(attemptNumber - 1, RETRY_BACKOFF_MS.length - 1)];
 }
 
 /**
@@ -1861,12 +1939,20 @@ function isRetryable(error: unknown): boolean {
  * they sat through; other kinds already carry the server's own words.
  */
 function exhausted(error: unknown, attempts: number, elapsedMs: number): unknown {
-  if (!isApiError(error) || error.kind !== 'timeout') return error;
+  if (!isApiError(error)) return error;
+  if (error.kind !== 'timeout' && error.kind !== 'network') return error;
+
+  const waited = `${Math.round(elapsedMs / 1000)}s (${attempts} attempts)`;
+  const advice = isLocalTarget()
+    ? 'No server is running at that address — start the backend, then Retry.'
+    : 'A free instance that has spun down can take a minute or more to wake — Retry will try again.';
+
   return new ApiError(
-    'timeout',
-    `The prediction service at ${BASE_URL} did not answer within ` +
-      `${Math.round(elapsedMs / 1000)}s (${attempts} attempts). A free instance ` +
-      'that has spun down can take a minute or more to wake — Retry will try again.'
+    error.kind,
+    error.kind === 'timeout'
+      ? `The prediction service at ${BASE_URL} did not answer within ${waited}. ${advice}`
+      : `The connection to ${BASE_URL} failed for ${waited}. A cold instance answers ` +
+        `502s without CORS headers, which a browser reports as a blocked request. ${advice}`
   );
 }
 
@@ -1893,10 +1979,17 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
     try {
       return await attempt(path, attemptTimeoutMs, options);
     } catch (error) {
-      const delayMs = RETRY_BACKOFF_MS[Math.min(attemptNumber - 1, RETRY_BACKOFF_MS.length - 1)];
+      const kind = isApiError(error) ? error.kind : null;
+      const delayMs = retryDelayMs(kind, attemptNumber);
       const elapsedMs = Date.now() - startedAt;
 
-      if (!isRetryable(error) || elapsedMs + delayMs >= deadlineMs) {
+      // A network failure is bounded by its own, shorter budget. `Math.min`
+      // rather than a replacement so an explicit `deadlineMs` from a caller
+      // (or a test) still wins when it is the tighter of the two.
+      const budgetMs =
+        kind === 'network' ? Math.min(deadlineMs, NETWORK_DEADLINE_MS) : deadlineMs;
+
+      if (!isRetryable(error) || elapsedMs + delayMs >= budgetMs) {
         throw exhausted(error, attemptNumber, elapsedMs);
       }
 

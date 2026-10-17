@@ -725,8 +725,17 @@ and `/api/checkout/plans` remain public and unaffected.
   Step 3). Both are beta-only and must be reverted before launch, and before any
   cookie-based login is introduced.
 - **Free Render instances sleep** (see Step 1). Expect a ~1 minute cold start
-  after 15 idle minutes. The client waits it out — retrying for up to 75s and
-  labelling the wait "WAKING" — instead of reporting an offline backend.
+  after 15 idle minutes. The client waits it out instead of reporting an offline
+  backend, and which retry it uses depends on how the cold start presents: a hung
+  attempt retries on a rising backoff for up to 75s, while a *network* failure —
+  the usual case, because Render's 502 error page carries no CORS headers and the
+  browser therefore blocks it before any status can be read — retries every 5s for
+  up to a minute. Both show as "WAKING".
+
+  Preferred fix is to stop it sleeping: point an uptime monitor at `GET /health`
+  every 10 minutes. Use `/health` and not `/api/health` — the latter reports
+  dependency state rather than liveness, and a monitor that alarms on a degraded
+  dependency is an alarm for a condition the service is built to survive.
 - **Supabase connection pooling.** Each Render instance opens its own
   connections. One instance is harmless; scaling the service up needs the pooler
   endpoint (`...pooler.supabase.com`) rather than direct connections.
