@@ -20,6 +20,7 @@ import { apiErrorText, type ApiErrorText } from '@/lib/api-error';
 import { formatP, percent } from '@/lib/backtest-format';
 import { formatLocalizedDate } from '@/lib/format';
 import {
+  HEATMAP_BAND_COUNTS,
   replayHeatmapSignals,
   type HeatmapReplayRow,
   type HeatmapSignalSource,
@@ -638,9 +639,13 @@ export default function PerformanceScreen() {
  *
  * **Why the band, not the top pick.** A 00-99 board's #1 pick is a 1-in-100 call; a
  * strict top-1 feed is mostly misses and reads as failure even when the model's
- * structure is sound. The green band is the signal the product actually publishes —
- * `HEATMAP_HIGH_SCORE` is the same threshold that colours the grid — so a draw landing
- * there is a real result the UI can celebrate without moving a goalpost after the fact.
+ * structure is sound. The green band is the signal the product actually publishes — it
+ * is the same 12-code quota `lib/heatmap.ts` assigns, so the card and the grid can never
+ * disagree about what green means — and a draw landing there is a real result the UI can
+ * celebrate without moving a goalpost after the fact. It is also a weaker claim than it
+ * looks: the band holds 12 of 100 codes, so roughly one draw in eight lands in it by
+ * chance. The footnote on the card says the replay is not a stored forecast for exactly
+ * that reason.
  *
  * When no signal in the window caught a draw, the card states the count instead of
  * disappearing: a silent card reads as "nothing to see" while an empty one reads as
@@ -728,7 +733,12 @@ function LatestHighlights({
           </View>
 
           <ThemedText type="small" themeColor="textSecondary" style={styles.highlightLine}>
-            {t(SOURCE_BODY_KEYS[hit.source], { number: highlight.actual })}
+            {t(SOURCE_BODY_KEYS[hit.source], {
+              number: highlight.actual,
+              // Only the green-band sentence uses this; the others ignore it, so one
+              // call site can serve every source without branching on the key.
+              share: HEATMAP_BAND_COUNTS.high,
+            })}
           </ThemedText>
 
           <ThemedText type="small" themeColor="textMuted" style={styles.highlightLine}>

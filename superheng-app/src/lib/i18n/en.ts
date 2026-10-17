@@ -613,11 +613,17 @@ export const en = {
   'insights.heatmapTitle': 'Four-model heatmap',
   'insights.heatmapSubtitle': 'Bottom two digits · next draw · weighted ensemble score',
   'insights.heatmapHint':
-    'Tap a cell to analyse that number · a green cell is in the board’s strongest band',
+    'Tap a cell to analyse that number · green is reserved for the board’s strict top band',
   'insights.heatmapLoading': 'Computing from the published draws…',
   'insights.heatmapThin': 'At least {draws} draws are needed to build the heatmap.',
-  'insights.heatmapBlend':
-    'Ensemble score = weighted sum of four models (25% each)',
+  'insights.heatmapBlend': 'Ensemble score = weighted sum of four models',
+  // The weights are refit per board from each model's own walk-forward log score, so the
+  // sentence quotes whatever the board in `lib/heatmap.ts` actually used this draw.
+  'insights.heatmapAdaptive':
+    'Adaptive AI weighting — refit from each model’s last {draws} walk-forward results. ' +
+    'This draw: {detail}.',
+  'insights.heatmapForm':
+    'Recent form: average percentile {rank}/100 across the last {draws} boards it produced',
   'insights.heatmapMarkovName': 'Markov chain · draw-to-draw transitions',
   'insights.heatmapMarkovBody':
     'How likely the latest code is to be followed by each other code, shrunk toward ' +
@@ -635,12 +641,16 @@ export const en = {
     'Simulates the next draw {paths} times from the measured mean, standard deviation ' +
     'and mean reversion of the real ledger.',
   'insights.heatmapScale':
-    'The 0–100 score is a percentile against the other 99 codes on this board, not a ' +
-    'probability · green cells score 75 or above · the strongest code’s chance is ' +
-    '{probability}% per draw (uniform baseline 1.00%).',
+    'Colour is a fixed quota, not a score cut-off: green is the {high} highest-ranked ' +
+    'codes, gold the next {medium}, red the next {low} and grey the rest. The 0–100 score ' +
+    'is each code’s percentile on this board, not a probability · the strongest code’s ' +
+    'chance is {probability}% per draw (uniform baseline 1.00%).',
   'insights.heatmapSample': 'Computed from {draws} draws · {from} → {to}',
-  'insights.legendLow': 'Weak',
-  'insights.legendHigh': 'Strong',
+  // The four quota bands, sizes printed from `HEATMAP_BAND_COUNTS` (out of 100 codes).
+  'insights.legendStrong': 'Strong · top {share}',
+  'insights.legendMedium': 'Medium · next {share}',
+  'insights.legendLow': 'Low · next {share}',
+  'insights.legendIgnore': 'Ignore · bottom {share}',
   'insights.parityNote':
     'Share of odd digits per draw. Spikes above 50% suggest a parity tilt.',
   'insights.rangeNote':
@@ -680,14 +690,68 @@ export const en = {
     '(1,1,1) residuals show narrowing variance in the last 5 draws, historically a ' +
     'precursor to a higher-conviction prediction.',
 
-  'myNumber.title': 'Check a number',
-  'myNumber.subtitle': 'Type any 2-digit code to see what the models say about it',
-  'myNumber.inputLabel': '2-digit code',
-  'myNumber.inputHint': 'Enter a number between 00 and 99',
-  'myNumber.invalid': 'That is not a 2-digit code.',
-  'myNumber.notFound': 'No recent draw contains that number.',
-  'myNumber.lastWon': 'Last seen {date}',
-  'myNumber.noRecent': 'No recent hit',
+  // My Number (/my-number). The generated sentences — verdict, advice — are ids in
+  // `data/mock.ts` resolved through the maps at the top of the screen, so nothing the
+  // analyst sees is assembled in the data layer.
+  // The grid's own band names, used in cell accessibility labels. Deliberately short:
+  // a screen reader reads one of these for every cell it lands on.
+  'heatmap.bandHigh': 'HIGH',
+  'heatmap.bandMedium': 'MEDIUM',
+  'heatmap.bandLow': 'LOW',
+  'heatmap.bandIgnore': 'IGNORE',
+  'heatmap.cellA11y': 'Number {code}, rank {rank} of 100, {band} band',
+
+  'myNumber.title': 'Your number',
+  'myNumber.subtitle': '2 or 3 digits — e.g. a licence plate',
+  'myNumber.inputLabel': 'Number to analyse',
+  'myNumber.analyse': 'Analyse',
+  'myNumber.try': 'Try',
+  'myNumber.verdictFavourable': 'Favourable statistical position',
+  'myNumber.verdictMild': 'Mild positive signal',
+  'myNumber.verdictNeutral': 'Neutral — no strong edge',
+  'myNumber.confidenceLine': '{level} confidence',
+  'myNumber.hengScore': 'Heng score',
+  'myNumber.appearances': 'Appearances',
+  'myNumber.lastWon': 'Last won',
+  'myNumber.noRecentHit': 'No recent hit',
+  'myNumber.parity': 'Parity',
+  'myNumber.parityAllEven': 'All even',
+  'myNumber.parityAllOdd': 'All odd',
+  'myNumber.parityMixed': 'Mixed parity',
+  'myNumber.digitSum': 'Digit sum',
+  'myNumber.prizeBottomTwo': 'Last two',
+  'myNumber.prizeFirstPrize': 'First prize',
+  'myNumber.signalProfile': 'Signal profile',
+  'myNumber.axisFrequency': 'Frequency',
+  'myNumber.axisRecency': 'Recency',
+  'myNumber.axisSeasonality': 'Seasonality',
+  'myNumber.axisBalance': 'Balance',
+  'myNumber.axisMomentum': 'Momentum',
+  'myNumber.aiAdvice': 'AI advice',
+  'myNumber.aiAdviceSubtitle': 'Model-derived recommendations',
+  'myNumber.adviceConsensus': 'Model consensus',
+  'myNumber.adviceConsensusBody':
+    'Probability of {probability}% for the trailing pair "{code}", ranked against ' +
+    'the current 00-99 grid.',
+  'myNumber.advicePositioning': 'Positioning',
+  'myNumber.advicePositioningConcentrated':
+    'Signals are concentrated in the Top position. Focus exposure there rather than ' +
+    'splitting evenly.',
+  'myNumber.advicePositioningSpread':
+    'Signals are spread across positions. Treat this as a diversification candidate, ' +
+    'not a core pick.',
+  'myNumber.adviceRisk': 'Risk note',
+  // The `_one` variants are picked by the `count` parameter, which is the odd-digit
+  // count: English inflects, Thai does not (see `common.draws_one` for the pattern).
+  'myNumber.adviceRiskBody_one':
+    'Digit sum {sum} with a single odd digit. This configuration appeared in ' +
+    '{appearances} of the last {draws} draws.',
+  'myNumber.adviceRiskBody':
+    'Digit sum {sum} with {odd} odd digits. This configuration appeared in ' +
+    '{appearances} of the last {draws} draws.',
+  'myNumber.emptyTitle': 'No analysis yet',
+  'myNumber.emptyBody':
+    'Enter a 2 or 3-digit number to see its Heng score, history and model advice.',
 
   // ---------------------------------------------------------------------------
   // Performance (/performance) — scorecard, prize checker, prediction history
@@ -769,7 +833,8 @@ export const en = {
   // Only used when the drawn code was in the board's green band before the draw
   // (score >= 75, the same HIGH definition as the heatmap colours).
   'performance.highlightsHeatmapBody':
-    'Bullseye — {number} came from the Heatmap at HIGH signal strength.',
+    'Bullseye — {number} was in the Heatmap’s green band (its strict top {share} of ' +
+    'codes) before the draw.',
   'performance.highlightsMarkovBody':
     'The draw came out {number} — the #1 code from the Markov model’s board.',
   'performance.highlightsFrequencyBody':
@@ -862,6 +927,22 @@ export const en = {
   'donate.qrA11y': 'QR code for supporting the developers',
   'donate.note':
     'Support is voluntary and has no effect on the draw or on the Heng score.',
+
+  // ---------------------------------------------------------------------------
+  // Developer credit
+  // ---------------------------------------------------------------------------
+  // The footer on every main screen. The founder's name is translated on purpose:
+  // Thai readers get the Thai spelling, English readers the Latin one, exactly as the
+  // credit was written in each language. It is a dictionary entry like any other, so
+  // the name and the sentence around it can never fall out of step.
+  //
+  // The link URLs deliberately do **not** live here — a profile URL is not copy, and
+  // duplicating it per language would let the two builds point at different profiles.
+  // They are constants in `components/superheng/credits-footer.tsx`.
+  'credits.developedBy': 'Developed with ❤️ by {name} (Founder)',
+  'credits.name': 'Ponrat Saripan',
+  'credits.githubA11y': 'Open the developer’s GitHub profile',
+  'credits.facebookA11y': 'Open the developer’s Facebook page',
 
   // ---------------------------------------------------------------------------
   // Legal notice

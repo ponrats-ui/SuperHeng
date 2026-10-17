@@ -12,14 +12,101 @@ import {
 } from '@/components/superheng';
 import { ThemedText } from '@/components/themed-text';
 import { Brand, DataColors, Radius, Spacing, probabilityColor } from '@/constants/theme';
-import { RADAR_AXES, analyzeNumber, type NumberAnalysis } from '@/data/mock';
+import {
+  DRAW_META,
+  RADAR_AXES,
+  analyzeNumber,
+  type AnalysisAdvice,
+  type AnalysisAdviceId,
+  type AnalysisParity,
+  type AnalysisPrize,
+  type AnalysisVerdict,
+  type NumberAnalysis,
+} from '@/data/mock';
 import { useAppTheme } from '@/hooks/use-app-theme';
-import { formatDate } from '@/lib/format';
+import { formatCount, formatLocalizedDate } from '@/lib/format';
+import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
 const SAMPLES = ['48', '512', '093'];
 
+/**
+ * Where each piece of generated copy lives.
+ *
+ * The data layer returns ids, not sentences (see `analysis` in `data/mock.ts`): a
+ * Thai screen reading English advice would be the same class of bug as a hardcoded
+ * label, only harder to spot, because the surrounding chrome would be translated.
+ * Every map below is `satisfies`-checked, so adding a verdict, a parity shape or a
+ * prize without a dictionary entry is a type error rather than a missing sentence.
+ */
+const VERDICT_KEYS = {
+  favourable: 'myNumber.verdictFavourable',
+  mild: 'myNumber.verdictMild',
+  neutral: 'myNumber.verdictNeutral',
+} as const satisfies Record<AnalysisVerdict, TranslationKey>;
+
+const PARITY_KEYS = {
+  allEven: 'myNumber.parityAllEven',
+  allOdd: 'myNumber.parityAllOdd',
+  mixed: 'myNumber.parityMixed',
+} as const satisfies Record<AnalysisParity, TranslationKey>;
+
+const PRIZE_KEYS = {
+  bottomTwo: 'myNumber.prizeBottomTwo',
+  firstPrize: 'myNumber.prizeFirstPrize',
+} as const satisfies Record<AnalysisPrize, TranslationKey>;
+
+const AXIS_KEYS = {
+  frequency: 'myNumber.axisFrequency',
+  recency: 'myNumber.axisRecency',
+  seasonality: 'myNumber.axisSeasonality',
+  balance: 'myNumber.axisBalance',
+  momentum: 'myNumber.axisMomentum',
+} as const satisfies Record<(typeof RADAR_AXES)[number], TranslationKey>;
+
+const ADVICE_TITLE_KEYS = {
+  consensus: 'myNumber.adviceConsensus',
+  positioning: 'myNumber.advicePositioning',
+  risk: 'myNumber.adviceRisk',
+} as const satisfies Record<AnalysisAdviceId, TranslationKey>;
+
+const CONFIDENCE_KEYS = {
+  High: 'confidence.high',
+  Medium: 'confidence.medium',
+  Low: 'confidence.low',
+} as const satisfies Record<string, TranslationKey>;
+
+/** The body sentence for one advice card, including the branch the data chose. */
+function adviceBodyKey(advice: AnalysisAdvice): TranslationKey {
+  if (advice.id === 'consensus') return 'myNumber.adviceConsensusBody';
+  if (advice.id === 'risk') return 'myNumber.adviceRiskBody';
+  return advice.variant === 'spread'
+    ? 'myNumber.advicePositioningSpread'
+    : 'myNumber.advicePositioningConcentrated';
+}
+
+/**
+ * The placeholders each body sentence needs.
+ *
+ * Every sentence gets all four, so the templates can reference whichever they use
+ * without the screen having to know which one that is. A card printing a number it
+ * did not name would be the failure worth avoiding here.
+ */
+function adviceParams(analysis: NumberAnalysis): Record<string, string | number> {
+  return {
+    code: analysis.code.slice(-2),
+    probability: analysis.probability.toFixed(1),
+    sum: analysis.digitSum,
+    odd: analysis.oddDigits,
+    // Drives the `_one` variant of the risk sentence, where English inflects.
+    count: analysis.oddDigits,
+    appearances: analysis.appearances,
+    draws: formatCount(DRAW_META.drawsAnalysed),
+  };
+}
+
 export default function MyNumberScreen() {
   const { colors } = useAppTheme();
+  const { t, language } = useTranslation();
   const params = useLocalSearchParams<{ code?: string }>();
 
   const paramCode = params.code ?? '';
@@ -44,12 +131,14 @@ export default function MyNumberScreen() {
     setAnalysis(analyzeNumber(digits));
   };
 
+  const axisLabels = RADAR_AXES.map((axis) => t(AXIS_KEYS[axis]));
+
   return (
     <PageScaffold>
-      <AppHeader subtitle="Analyse any number" />
+      <AppHeader subtitle={t('header.myNumberSubtitle')} />
 
       <Card>
-        <SectionHeader title="Your number" subtitle="2 or 3 digits — e.g. a licence plate" />
+        <SectionHeader title={t('myNumber.title')} subtitle={t('myNumber.subtitle')} />
 
         <View style={styles.inputRow}>
           <TextInput
@@ -61,7 +150,7 @@ export default function MyNumberScreen() {
             keyboardType="number-pad"
             maxLength={3}
             returnKeyType="search"
-            accessibilityLabel="Number to analyse"
+            accessibilityLabel={t('myNumber.inputLabel')}
             style={[
               styles.input,
               { color: colors.text, backgroundColor: colors.backgroundElement, borderColor: colors.cardBorder },
@@ -74,13 +163,15 @@ export default function MyNumberScreen() {
               styles.button,
               { backgroundColor: colors.primary, opacity: pressed ? 0.85 : 1 },
             ]}>
-            <ThemedText style={[styles.buttonText, { color: colors.onPrimary }]}>Analyse</ThemedText>
+            <ThemedText style={[styles.buttonText, { color: colors.onPrimary }]}>
+              {t('myNumber.analyse')}
+            </ThemedText>
           </Pressable>
         </View>
 
         <View style={styles.samples}>
           <ThemedText type="small" themeColor="textMuted" style={styles.samplesLabel}>
-            Try
+            {t('myNumber.try')}
           </ThemedText>
           {SAMPLES.map((sample) => (
             <Pressable
@@ -109,46 +200,58 @@ export default function MyNumberScreen() {
               <View style={styles.resultInfo}>
                 <ThemedText style={styles.resultCode}>{analysis.code}</ThemedText>
                 <ThemedText type="small" style={[styles.verdict, { color: probabilityColor(analysis.score) }]}>
-                  {analysis.verdict}
+                  {t(VERDICT_KEYS[analysis.verdict])}
                 </ThemedText>
                 <ThemedText type="small" themeColor="textMuted">
-                  {analysis.confidence} confidence
+                  {t('myNumber.confidenceLine', {
+                    level: t(CONFIDENCE_KEYS[analysis.confidence]),
+                  })}
                 </ThemedText>
               </View>
               <ScoreRing
                 score={analysis.score}
                 size={124}
                 color={probabilityColor(analysis.score)}
-                label="Heng score"
+                label={t('myNumber.hengScore')}
               />
             </View>
 
             <View style={styles.statGrid}>
-              <StatBox label="Appearances" value={`${analysis.appearances}x`} />
               <StatBox
-                label="Last won"
-                value={analysis.lastWon ? analysis.lastWon.prize : '—'}
-                hint={analysis.lastWon ? formatDate(analysis.lastWon.date) : 'No recent hit'}
+                label={t('myNumber.appearances')}
+                value={`${analysis.appearances}×`}
               />
-              <StatBox label="Parity" value={analysis.parity} />
-              <StatBox label="Digit sum" value={`${analysis.digitSum}`} />
+              <StatBox
+                label={t('myNumber.lastWon')}
+                value={analysis.lastWon ? t(PRIZE_KEYS[analysis.lastWon.prize]) : '—'}
+                hint={
+                  analysis.lastWon
+                    ? formatLocalizedDate(analysis.lastWon.date, language)
+                    : t('myNumber.noRecentHit')
+                }
+              />
+              <StatBox label={t('myNumber.parity')} value={t(PARITY_KEYS[analysis.parity])} />
+              <StatBox label={t('myNumber.digitSum')} value={`${analysis.digitSum}`} />
             </View>
           </Card>
 
           <Card>
-            <SectionHeader title="Signal profile" subtitle={RADAR_AXES.join(' · ')} />
+            <SectionHeader
+              title={t('myNumber.signalProfile')}
+              subtitle={axisLabels.join(' · ')}
+            />
             <View style={styles.radarRow}>
               <RadarChart
                 values={analysis.radar}
                 size={140}
                 color={Brand.crimson}
-                labels={RADAR_AXES}
+                labels={axisLabels}
               />
               <View style={styles.radarLegend}>
                 {RADAR_AXES.map((axis, index) => (
                   <View key={axis} style={styles.legendItem}>
                     <ThemedText type="small" themeColor="textSecondary" style={styles.legendLabel}>
-                      {axis}
+                      {t(AXIS_KEYS[axis])}
                     </ThemedText>
                     <ThemedText type="smallBold" style={styles.legendValue}>
                       {Math.round(analysis.radar[index] * 100)}
@@ -160,13 +263,16 @@ export default function MyNumberScreen() {
           </Card>
 
           <Card>
-            <SectionHeader title="AI advice" subtitle="Model-derived recommendations" />
+            <SectionHeader
+              title={t('myNumber.aiAdvice')}
+              subtitle={t('myNumber.aiAdviceSubtitle')}
+            />
             <View style={styles.adviceList}>
               {analysis.advice.map((item) => (
-                <View key={item.title} style={[styles.advice, { borderLeftColor: DataColors[item.tone] }]}>
-                  <ThemedText type="smallBold">{item.title}</ThemedText>
+                <View key={item.id} style={[styles.advice, { borderLeftColor: DataColors[item.tone] }]}>
+                  <ThemedText type="smallBold">{t(ADVICE_TITLE_KEYS[item.id])}</ThemedText>
                   <ThemedText type="small" themeColor="textSecondary" style={styles.adviceBody}>
-                    {item.body}
+                    {t(adviceBodyKey(item), adviceParams(analysis))}
                   </ThemedText>
                 </View>
               ))}
@@ -176,9 +282,9 @@ export default function MyNumberScreen() {
       ) : (
         <Card>
           <View style={styles.empty}>
-            <ThemedText type="smallBold">No analysis yet</ThemedText>
+            <ThemedText type="smallBold">{t('myNumber.emptyTitle')}</ThemedText>
             <ThemedText type="small" themeColor="textMuted" style={styles.emptyText}>
-              Enter a 2 or 3-digit number to see its Heng score, history and model advice.
+              {t('myNumber.emptyBody')}
             </ThemedText>
           </View>
         </Card>

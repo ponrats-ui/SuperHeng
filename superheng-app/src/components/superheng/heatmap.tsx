@@ -1,9 +1,10 @@
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { Radius, probabilityColor } from '@/constants/theme';
+import { DataColors, Radius } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
-import { HEATMAP_HIGH_SCORE, type HeatmapCell } from '@/lib/heatmap';
+import { type HeatmapCell, type HeatmapTier } from '@/lib/heatmap';
+import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
 export type HeatmapProps = {
   cells: HeatmapCell[];
@@ -11,15 +12,44 @@ export type HeatmapProps = {
   onSelect?: (code: string) => void;
 };
 
-/** Converts a 0-100 score into a 2-char hex alpha channel. */
+/**
+ * Band → colour.
+ *
+ * Deliberately **not** `probabilityColor(score)`: that helper bands a 0-100 score by
+ * absolute thresholds (75/55/35), which is what put a quarter of this grid in green.
+ * Here the band is a quota assigned by `lib/heatmap.ts`, and the colour simply reports
+ * which quota a cell landed in. The two must stay separate or the grid quietly goes
+ * back to threshold banding.
+ */
+const TIER_COLORS: Record<HeatmapTier, string> = {
+  high: DataColors.high,
+  medium: DataColors.medium,
+  low: DataColors.low,
+  ignore: DataColors.cold,
+};
+
+const BAND_KEYS = {
+  high: 'heatmap.bandHigh',
+  medium: 'heatmap.bandMedium',
+  low: 'heatmap.bandLow',
+  ignore: 'heatmap.bandIgnore',
+} as const satisfies Record<HeatmapTier, TranslationKey>;
+
+/**
+ * Converts a cell's 0-100 score into a 2-char hex alpha channel.
+ *
+ * Shading stays continuous inside a band so the grid is still readable as a heatmap,
+ * while the *hue* — the thing a reader acts on — is a strict quota.
+ */
 function alphaFor(score: number): string {
   const alpha = Math.round((0.14 + (Math.min(100, score) / 100) * 0.8) * 255);
   return alpha.toString(16).padStart(2, '0').toUpperCase();
 }
 
-/** 10x10 grid of numbers colored by model probability. */
+/** 10x10 grid of numbers coloured by quota band, shaded by percentile. */
 export function Heatmap({ cells, onSelect }: HeatmapProps) {
   const { colors } = useAppTheme();
+  const { t } = useTranslation();
 
   const rows = Array.from({ length: 10 }, (_, row) => cells.slice(row * 10, row * 10 + 10));
 
@@ -28,18 +58,21 @@ export function Heatmap({ cells, onSelect }: HeatmapProps) {
       {rows.map((row, rowIndex) => (
         <View key={rowIndex} style={styles.row}>
           {row.map((cell) => {
-            const base = probabilityColor(cell.score);
-            const alpha = alphaFor(cell.score);
-            const strong = cell.score >= HEATMAP_HIGH_SCORE;
+            const base = TIER_COLORS[cell.tier];
+            const strong = cell.tier === 'high';
             return (
               <Pressable
                 key={cell.code}
-                accessibilityLabel={`Number ${cell.code}, signal score ${Math.round(cell.score)} of 100`}
+                accessibilityLabel={t('heatmap.cellA11y', {
+                  code: cell.code,
+                  rank: cell.rank,
+                  band: t(BAND_KEYS[cell.tier]),
+                })}
                 onPress={() => onSelect?.(cell.code)}
                 style={({ pressed }) => [
                   styles.cell,
                   {
-                    backgroundColor: `${base}${alpha}`,
+                    backgroundColor: `${base}${alphaFor(cell.score)}`,
                     borderColor: strong ? base : colors.cardBorder,
                   },
                   pressed && styles.pressed,

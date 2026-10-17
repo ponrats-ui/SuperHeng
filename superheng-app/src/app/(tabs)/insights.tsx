@@ -19,12 +19,16 @@ import { getLatestDraws } from '@/lib/api';
 import { apiErrorText, type ApiErrorText } from '@/lib/api-error';
 import { formatCount, formatLocalizedDate } from '@/lib/format';
 import {
+  HEATMAP_ACCURACY_WINDOW,
+  HEATMAP_BAND_COUNTS,
   HEATMAP_SIMULATIONS,
-  HEATMAP_WEIGHTS,
+  HEATMAP_TIERS,
   MIN_HEATMAP_DRAWS,
   buildHeatmapBoard,
+  weightPercents,
   type HeatmapBoard,
   type HeatmapModel,
+  type HeatmapTier,
 } from '@/lib/heatmap';
 import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
@@ -50,38 +54,68 @@ const LOG_COPY: Record<string, { headline: TranslationKey; detail: TranslationKe
 };
 
 /**
- * The four models under the grid, in the order the weights are listed.
+ * The four models under the grid, in the order the copy lists them.
  *
  * Every line here describes what the code in `lib/heatmap.ts` actually does — the
  * shrinkage, the decay half-life, the simulation count. Marketing copy that outran the
  * model would be the same problem as a fake probability, only in prose.
+ *
+ * `label` is the short name the weight sentence uses; it stays untranslated because
+ * these are model names, not prose.
  */
 const HEATMAP_MODELS: readonly {
   model: HeatmapModel;
+  label: string;
   name: TranslationKey;
   body: TranslationKey;
 }[] = [
   {
     model: 'markov',
+    label: 'Markov',
     name: 'insights.heatmapMarkovName',
     body: 'insights.heatmapMarkovBody',
   },
   {
     model: 'frequency',
+    label: 'Frequency',
     name: 'insights.heatmapFrequencyName',
     body: 'insights.heatmapFrequencyBody',
   },
   {
     model: 'momentum',
+    label: 'Momentum',
     name: 'insights.heatmapMomentumName',
     body: 'insights.heatmapMomentumBody',
   },
   {
     model: 'montecarlo',
+    label: 'Monte Carlo',
     name: 'insights.heatmapMontecarloName',
     body: 'insights.heatmapMontecarloBody',
   },
 ];
+
+/**
+ * The legend, in band order.
+ *
+ * Colours here mirror `components/superheng/heatmap.tsx`; the **sizes come from the
+ * board code** (`HEATMAP_BAND_COUNTS`), so "top 12" in the legend is the same 12 the
+ * grid paints green. The earlier legend showed a colour ramp with no band at all, which
+ * is how a quarter of the grid ended up reading as a signal.
+ */
+const LEGEND_KEYS = {
+  high: 'insights.legendStrong',
+  medium: 'insights.legendMedium',
+  low: 'insights.legendLow',
+  ignore: 'insights.legendIgnore',
+} as const satisfies Record<HeatmapTier, TranslationKey>;
+
+const LEGEND_COLORS: Record<HeatmapTier, string> = {
+  high: DataColors.high,
+  medium: DataColors.medium,
+  low: DataColors.low,
+  ignore: DataColors.cold,
+};
 
 type HeatmapState =
   | { status: 'loading' }
@@ -140,6 +174,17 @@ export default function InsightsScreen() {
     () => (board ? board.byCode[board.signals.top1] : null),
     [board]
   );
+
+  // The weight sentence and the badges read from one table of whole numbers, so the
+  // headline can never disagree with the rows under it.
+  const percents = useMemo(() => (board ? weightPercents(board.weights) : null), [board]);
+  const weightDetail = useMemo(() => {
+    if (!board || !percents) return '';
+    return [...HEATMAP_MODELS]
+      .sort((a, b) => board.weights[b.model] - board.weights[a.model])
+      .map((entry) => `${entry.label} ${percents[entry.model]}%`)
+      .join(', ');
+  }, [board, percents]);
 
   const trendOptions = [
     { key: 'parity' as const, label: t('insights.parity') },
@@ -221,55 +266,77 @@ export default function InsightsScreen() {
                   {t('insights.heatmapHint')}
                 </ThemedText>
                 <View style={styles.legend}>
-                  <ThemedText type="small" themeColor="textMuted" style={styles.legendLabel}>
-                    {t('insights.legendLow')}
-                  </ThemedText>
-                  {[DataColors.cold, DataColors.low, DataColors.medium, DataColors.high].map(
-                    (color) => (
+                  {HEATMAP_TIERS.map((tier) => (
+                    <View key={tier} style={styles.legendItem}>
                       <View
-                        key={color}
-                        style={[styles.legendSwatch, { backgroundColor: color }]}
+                        style={[styles.legendSwatch, { backgroundColor: LEGEND_COLORS[tier] }]}
                       />
-                    )
-                  )}
-                  <ThemedText type="small" themeColor="textMuted" style={styles.legendLabel}>
-                    {t('insights.legendHigh')}
-                  </ThemedText>
+                      <ThemedText type="small" themeColor="textMuted" style={styles.legendLabel}>
+                        {t(LEGEND_KEYS[tier], { share: HEATMAP_BAND_COUNTS[tier] })}
+                      </ThemedText>
+                    </View>
+                  ))}
                 </View>
 
                 {/*
                   What the score is, model by model. The weights are printed from the
-                  same table the arithmetic uses (`HEATMAP_WEIGHTS`), so the panel cannot
-                  promise a blend the code does not apply.
+                  same table the arithmetic used (`board.weights`), so the panel cannot
+                  promise a blend the code did not apply. Each row also carries that
+                  model's own recent form, which is the evidence behind its share.
                 */}
                 <View style={[styles.models, { borderTopColor: colors.cardBorder }]}>
                   <ThemedText type="smallBold">{t('insights.heatmapBlend')}</ThemedText>
-                  {HEATMAP_MODELS.map((model) => (
-                    <View key={model.name} style={styles.modelRow}>
-                      <View style={[styles.modelWeight, { backgroundColor: `${colors.gold}1F` }]}>
-                        <ThemedText
-                          type="small"
-                          style={[styles.modelWeightText, { color: colors.accent }]}>
-                          {`${Math.round(HEATMAP_WEIGHTS[model.model] * 100)}%`}
-                        </ThemedText>
+                  <ThemedText
+                    type="small"
+                    themeColor="textSecondary"
+                    style={styles.modelBody}>
+                    {t('insights.heatmapAdaptive', {
+                      draws: HEATMAP_ACCURACY_WINDOW,
+                      detail: weightDetail,
+                    })}
+                  </ThemedText>
+
+                  {HEATMAP_MODELS.map((entry) => {
+                    const form = board.form.find((row) => row.model === entry.model);
+                    return (
+                      <View key={entry.name} style={styles.modelRow}>
+                        <View
+                          style={[styles.modelWeight, { backgroundColor: `${colors.gold}1F` }]}>
+                          <ThemedText
+                            type="small"
+                            style={[styles.modelWeightText, { color: colors.accent }]}>
+                            {`${percents ? percents[entry.model] : 0}%`}
+                          </ThemedText>
+                        </View>
+                        <View style={styles.modelText}>
+                          <ThemedText type="smallBold">
+                            {t(entry.name, { paths: formatCount(HEATMAP_SIMULATIONS) })}
+                          </ThemedText>
+                          <ThemedText
+                            type="small"
+                            themeColor="textSecondary"
+                            style={styles.modelBody}>
+                            {t(entry.body, { paths: formatCount(HEATMAP_SIMULATIONS) })}
+                          </ThemedText>
+                          {form ? (
+                            <ThemedText type="small" themeColor="textMuted" style={styles.modelMeta}>
+                              {t('insights.heatmapForm', {
+                                draws: form.draws,
+                                rank: Math.round(form.rank),
+                              })}
+                            </ThemedText>
+                          ) : null}
+                        </View>
                       </View>
-                      <View style={styles.modelText}>
-                        <ThemedText type="smallBold">
-                          {t(model.name, { paths: formatCount(HEATMAP_SIMULATIONS) })}
-                        </ThemedText>
-                        <ThemedText
-                          type="small"
-                          themeColor="textSecondary"
-                          style={styles.modelBody}>
-                          {t(model.body, { paths: formatCount(HEATMAP_SIMULATIONS) })}
-                        </ThemedText>
-                      </View>
-                    </View>
-                  ))}
+                    );
+                  })}
 
                   <ThemedText type="small" themeColor="textMuted" style={styles.chartNote}>
                     {t('insights.heatmapScale', {
                       probability: topCell.probability.toFixed(2),
+                      high: HEATMAP_BAND_COUNTS.high,
+                      medium: HEATMAP_BAND_COUNTS.medium,
+                      low: HEATMAP_BAND_COUNTS.low,
                     })}
                   </ThemedText>
                   <ThemedText type="small" themeColor="textMuted" style={styles.chartNote}>
@@ -414,22 +481,34 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 16,
   },
+  modelMeta: {
+    fontSize: 10,
+    lineHeight: 14,
+    fontVariant: ['tabular-nums'],
+  },
   legend: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: Spacing.two,
     marginTop: Spacing.three,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    minWidth: '46%',
   },
   legendLabel: {
     fontSize: 10,
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.4,
+    flexShrink: 1,
   },
   legendSwatch: {
-    width: 22,
-    height: 8,
-    borderRadius: 4,
+    width: 14,
+    height: 10,
+    borderRadius: 3,
   },
   controlRow: {
     marginTop: Spacing.three,

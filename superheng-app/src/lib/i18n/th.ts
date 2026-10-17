@@ -74,7 +74,7 @@ export const th: Record<TranslationKey, string> = {
 
   'header.dashboardSubtitle': 'วิเคราะห์ความน่าจะเป็น',
   'header.insightsSubtitle': 'เจาะลึกสถิติ',
-  'header.myNumberSubtitle': 'วิเคราะห์เลขใดก็ได้',
+  'header.myNumberSubtitle': 'วิเคราะห์เจาะลึกทุกตัวเลข',
   'header.performanceSubtitle': 'ผลงานและความโปร่งใส',
   'header.backtestSubtitle': 'พิสูจน์ได้ ไม่ใช่แค่คำโฆษณา',
   'header.gridBadge': 'ตาราง 00–99',
@@ -510,10 +510,16 @@ export const th: Record<TranslationKey, string> = {
   'insights.range': 'สูง / ต่ำ',
   'insights.heatmapTitle': 'แผนความร้อน 4 โมเดล',
   'insights.heatmapSubtitle': 'เลขท้าย 2 ตัว · งวดถัดไป · คะแนนรวมแบบถ่วงน้ำหนัก',
-  'insights.heatmapHint': 'แตะช่องเพื่อวิเคราะห์เลขนั้น · ช่องเขียวคือกลุ่มสัญญาณแรงสุดของกระดาน',
+  'insights.heatmapHint': 'แตะช่องเพื่อวิเคราะห์เลขนั้น · ช่องเขียวสงวนไว้เฉพาะกลุ่มอันดับสูงสุดแบบโควตาตายตัว',
   'insights.heatmapLoading': 'กำลังคำนวณจากผลออกรางวัลจริง…',
   'insights.heatmapThin': 'ต้องมีอย่างน้อย {draws} งวดจึงจะคำนวณแผนความร้อนได้',
-  'insights.heatmapBlend': 'คะแนนรวม = ผลรวมถ่วงน้ำหนักของ 4 โมเดล (โมเดลละ 25%)',
+  'insights.heatmapBlend': 'คะแนนรวม = ผลรวมถ่วงน้ำหนักของ 4 โมเดล',
+  // น้ำหนักถูกคำนวณใหม่ทุกกระดานจากผลย้อนหลังของแต่ละโมเดล ประโยคนี้จึงรายงานตัวเลข
+  // ที่กระดานใน `lib/heatmap.ts` ใช้จริงสำหรับงวดนี้
+  'insights.heatmapAdaptive':
+    'ขับเคลื่อนด้วย AI แบบปรับน้ำหนักอัตโนมัติ — คำนวณใหม่จากผลย้อนหลัง {draws} งวดของแต่ละโมเดล (งวดนี้: {detail})',
+  'insights.heatmapForm':
+    'ฟอร์มล่าสุด: เพอร์เซ็นไทล์เฉลี่ย {rank}/100 จาก {draws} กระดานย้อนหลังที่โมเดลนี้สร้าง',
   'insights.heatmapMarkovName': 'Markov chain · การเปลี่ยนสถานะข้ามงวด',
   'insights.heatmapMarkovBody':
     'โอกาสที่เลขจะเปลี่ยนจากเลขงวดล่าสุดไปเป็นเลขใด โดยถ่วงน้ำหนักด้วยความถี่ระยะยาวเมื่อจำนวนการเปลี่ยนสถานะที่สังเกตได้ยังน้อย',
@@ -527,10 +533,13 @@ export const th: Record<TranslationKey, string> = {
   'insights.heatmapMontecarloBody':
     'จำลองงวดถัดไป {paths} ครั้งจากค่าเฉลี่ย ส่วนเบี่ยงเบนมาตรฐาน และการดึงกลับเข้าหาค่าเฉลี่ย (mean reversion) ที่วัดได้จากข้อมูลจริง',
   'insights.heatmapScale':
-    'คะแนน 0–100 คืออันดับความแรงเทียบกับเลขทั้ง 100 ตัวบนกระดานนี้ ไม่ใช่ความน่าจะเป็น · ช่องเขียวคือคะแนน 75 ขึ้นไป · เลขแรงสุดมีโอกาส {probability}% ต่องวด (ฐานสุ่ม 1.00%)',
+    'สีถูกจัดเป็นโควตาตายตัว ไม่ได้ตัดที่คะแนน: เขียวคือ {high} เลขอันดับสูงสุด ทองคือ {medium} เลขถัดไป แดงคือ {low} เลขถัดไป และเทาคือที่เหลือ · คะแนน 0–100 คืออันดับความแรง (เพอร์เซ็นไทล์) บนกระดานนี้ ไม่ใช่ความน่าจะเป็น · เลขแรงสุดมีโอกาส {probability}% ต่องวด (ฐานสุ่ม 1.00%)',
   'insights.heatmapSample': 'คำนวณจาก {draws} งวด · {from} → {to}',
-  'insights.legendLow': 'อ่อน',
-  'insights.legendHigh': 'แรง',
+  // สี่กลุ่มโควตา ขนาดพิมพ์จาก `HEATMAP_BAND_COUNTS` (จาก 100 เลข)
+  'insights.legendStrong': 'แรง · สูงสุด {share}',
+  'insights.legendMedium': 'ปานกลาง · {share} ถัดไป',
+  'insights.legendLow': 'ต่ำ · {share} ถัดไป',
+  'insights.legendIgnore': 'ไม่ใช้ · {share} ล่างสุด',
   'insights.parityNote': 'สัดส่วนเลขคี่ในแต่ละงวด ค่าที่เกิน 50% บ่งชี้ว่าช่วงนั้นเอียงไปทางเลขคี่',
   'insights.rangeNote': 'สัดส่วนเลขสูง (5–9) ในแต่ละงวด ใช้ประกอบการเลือกช่วงเลข',
   'insights.aiLogTitle': 'บันทึกเหตุผล AI',
@@ -559,14 +568,60 @@ export const th: Record<TranslationKey, string> = {
   'insights.log.log4.detail':
     'เศษที่เหลือจากแบบจำลอง (1,1,1) มีความแปรปรวนแคบลงใน 5 งวดล่าสุด ซึ่งในอดีตมักนำไปสู่คำทำนายที่มั่นใจขึ้น',
 
-  'myNumber.title': 'ตรวจเลข',
-  'myNumber.subtitle': 'พิมพ์เลข 2 หลักเพื่อดูว่าแบบจำลองว่าอย่างไร',
-  'myNumber.inputLabel': 'เลข 2 หลัก',
-  'myNumber.inputHint': 'กรอกตัวเลขระหว่าง 00 ถึง 99',
-  'myNumber.invalid': 'ไม่ใช่เลข 2 หลัก',
-  'myNumber.notFound': 'ไม่พบเลขนี้ในงวดล่าสุด',
-  'myNumber.lastWon': 'ออกล่าสุด {date}',
-  'myNumber.noRecent': 'ยังไม่เคยออกล่าสุด',
+  // หน้าตรวจเลข — ประโยคที่ระบบสร้างขึ้น (ผลวิเคราะห์ คำแนะนำ) เก็บเป็น id ใน
+  // `data/mock.ts` แล้วแปลงผ่านตารางด้านบนของหน้าจอ จึงไม่มีข้อความอังกฤษหลุดมา
+  // ชื่อกลุ่มสีของตาราง ใช้ในป้าย accessibility ของแต่ละช่อง
+  'heatmap.bandHigh': 'สูง',
+  'heatmap.bandMedium': 'ปานกลาง',
+  'heatmap.bandLow': 'ต่ำ',
+  'heatmap.bandIgnore': 'ไม่ใช้',
+  'heatmap.cellA11y': 'เลข {code} · อันดับ {rank} จาก 100 · กลุ่ม{band}',
+
+  'myNumber.title': 'เลขของคุณ',
+  'myNumber.subtitle': 'ระบุ 2 หรือ 3 ตัวเลข — เช่น ทะเบียนรถ, เลขอายุ',
+  'myNumber.inputLabel': 'ตัวเลขที่ต้องการวิเคราะห์',
+  'myNumber.analyse': 'วิเคราะห์',
+  'myNumber.try': 'ลองพิมพ์',
+  'myNumber.verdictFavourable': 'สถิติอยู่ในเกณฑ์ดีเยี่ยม',
+  'myNumber.verdictMild': 'สัญญาณบวกระดับปานกลาง',
+  'myNumber.verdictNeutral': 'เป็นกลาง — ยังไม่เห็นความได้เปรียบชัดเจน',
+  'myNumber.confidenceLine': 'ความมั่นใจระดับ{level}',
+  'myNumber.hengScore': 'คะแนนความเฮง',
+  'myNumber.appearances': 'สถิติการออกรางวัล',
+  'myNumber.lastWon': 'ออกรางวัลล่าสุด',
+  'myNumber.noRecentHit': 'ยังไม่ออกในเร็วๆ นี้',
+  'myNumber.parity': 'สัดส่วน คู่/คี่',
+  'myNumber.parityAllEven': 'เลขคู่ทั้งหมด',
+  'myNumber.parityAllOdd': 'เลขคี่ทั้งหมด',
+  'myNumber.parityMixed': 'ผสมคู่-คี่',
+  'myNumber.digitSum': 'ผลรวมตัวเลข',
+  'myNumber.prizeBottomTwo': 'เลขท้าย 2 ตัว',
+  'myNumber.prizeFirstPrize': 'รางวัลที่ 1',
+  'myNumber.signalProfile': 'โปรไฟล์สัญญาณสถิติ',
+  'myNumber.axisFrequency': 'ความถี่',
+  'myNumber.axisRecency': 'ความใหม่ล่าสุด',
+  'myNumber.axisSeasonality': 'ตามฤดูกาล',
+  'myNumber.axisBalance': 'ความสมดุล',
+  'myNumber.axisMomentum': 'โมเมนตัม',
+  'myNumber.aiAdvice': 'คำแนะนำจาก AI',
+  'myNumber.aiAdviceSubtitle': 'สรุปคำแนะนำจากการคำนวณของโมเดลสถิติ',
+  'myNumber.adviceConsensus': 'ความเห็นพ้องของโมเดล',
+  'myNumber.adviceConsensusBody':
+    'ความน่าจะเป็น {probability}% สำหรับเลขท้าย “{code}” เมื่อเทียบกับตัวเลข 00-99 ทั้งหมด',
+  'myNumber.advicePositioning': 'ตำแหน่งที่ควรเน้น',
+  'myNumber.advicePositioningConcentrated':
+    'สัญญาณสถิติกระจุกตัวอยู่ที่รางวัลที่ 1 (บน) แนะนำให้เน้นที่ตำแหน่งนี้เป็นหลัก',
+  'myNumber.advicePositioningSpread':
+    'สัญญาณกระจายอยู่ในหลายตำแหน่ง ควรมองเป็นตัวเลือกเสริมมากกว่าตัวเลือกหลัก',
+  'myNumber.adviceRisk': 'ข้อควรระวัง (ความเสี่ยง)',
+  // ไทยไม่ผันพจน์ตามจำนวน จึงใช้ข้อความเดียวกับพหูพจน์ (คู่กับ `common.draws_one`)
+  'myNumber.adviceRiskBody_one':
+    'ผลรวมได้ {sum} โดยมีเลขคี่ {odd} ตัว รูปแบบนี้เคยเกิดขึ้น {appearances} ครั้งจากการออกรางวัล {draws} งวดล่าสุด',
+  'myNumber.adviceRiskBody':
+    'ผลรวมได้ {sum} โดยมีเลขคี่ {odd} ตัว รูปแบบนี้เคยเกิดขึ้น {appearances} ครั้งจากการออกรางวัล {draws} งวดล่าสุด',
+  'myNumber.emptyTitle': 'ยังไม่มีการวิเคราะห์',
+  'myNumber.emptyBody':
+    'พิมพ์เลข 2 หรือ 3 ตัวเพื่อดูคะแนนความเฮง สถิติย้อนหลัง และคำแนะนำจากโมเดล',
 
   // Performance (/performance) — คะแนน ตรวจรางวัล และประวัติการทายผล
   'performance.title': 'ผลงานและความโปร่งใส',
@@ -629,7 +684,7 @@ export const th: Record<TranslationKey, string> = {
   // ข้อความนี้ใช้ได้เฉพาะเมื่อเลขที่ออกอยู่ในแถบเขียวของกระดานก่อนออกรางวัล
   // (คะแนน ≥ 75 ซึ่งเป็นนิยาม HIGH เดียวกับสีบน Heatmap) เท่านั้น
   'performance.highlightsHeatmapBody':
-    'เจาะเข้าเป้า! เลข {number} อยู่ในแถบสัญญาณแรง (HIGH) ของ Heatmap ก่อนออกรางวัล',
+    'เจาะเข้าเป้า! เลข {number} อยู่ในแถบเขียวของ Heatmap ซึ่งเป็น {share} อันดับสูงสุดตามโควตาก่อนออกรางวัล',
   'performance.highlightsMarkovBody':
     'งวดนี้ออกเลข {number} ซึ่งเป็นเลขอันดับ 1 ของโมเดล Markov ในงวดนั้น',
   'performance.highlightsFrequencyBody':
@@ -695,6 +750,16 @@ export const th: Record<TranslationKey, string> = {
   'donate.qrCaption': 'สแกน QR เพื่อเลี้ยงกาแฟทีมงาน',
   'donate.qrA11y': 'QR code สำหรับสนับสนุนนักพัฒนา',
   'donate.note': 'การสนับสนุนเป็นไปโดยความสมัครใจ และไม่มีผลต่อผลการออกรางวัลหรือคะแนน Heng Score',
+
+  // Developer credit — เครดิตผู้พัฒนา ท้ายทุกหน้าจอหลัก
+  //
+  // ชื่อผู้ก่อตั้งแปลตามภาษาโดยตั้งใจ: ฉบับไทยใช้ชื่อไทย ฉบับอังกฤษใช้ชื่ออังกฤษ
+  // ตามที่เขียนไว้ในแต่ละภาษา ส่วน URL ของลิงก์ไม่ได้เก็บที่นี่ เพราะที่อยู่โปรไฟล์
+  // ไม่ใช่ข้อความแปล และการเก็บซ้ำสองภาษาจะทำให้สองบิลด์ชี้ไปคนละโปรไฟล์
+  'credits.developedBy': 'พัฒนาโดย {name}',
+  'credits.name': 'พลรัตน์ สาริพันธุ์',
+  'credits.githubA11y': 'เปิดโปรไฟล์ GitHub ของผู้พัฒนา',
+  'credits.facebookA11y': 'เปิดเพจ Facebook ของผู้พัฒนา',
 
   // Legal notice — ข้อความตามที่ฝ่ายกฎหมายกำหนด ใช้คำต่อคำ ไม่ปรับสำนวน
   // (ดูคำอธิบายใน en.ts ว่าทำไมข้อความนี้ต้องไม่ถูกแก้ไข)

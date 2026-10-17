@@ -122,26 +122,70 @@ export type AiLogEntry = {
   confidence: Confidence;
 };
 
+export type SignalTone = 'high' | 'medium' | 'low' | 'cold';
+
+/** Which verdict sentence the screen prints. Copy lives in `lib/i18n`. */
+export type AnalysisVerdict = 'favourable' | 'mild' | 'neutral';
+
+/** Whether every digit is even, every digit is odd, or the number mixes them. */
+export type AnalysisParity = 'allEven' | 'allOdd' | 'mixed';
+
+/** Which prize a past appearance won, so the label can be translated. */
+export type AnalysisPrize = 'bottomTwo' | 'firstPrize';
+
+export type AnalysisAdviceId = 'consensus' | 'positioning' | 'risk';
+
+/**
+ * One advice card.
+ *
+ * Like the Insights log, the **copy is not here** — it lives in `lib/i18n` under
+ * `myNumber.advice.*`, keyed by `id`, so both languages stay in step and a missing
+ * Thai sentence is a `tsc` error rather than English leaking into the Thai screen.
+ * `variant` is the one branch the data decides (concentrated vs spread signals), and
+ * it is decided here so the branch and the number it comes from cannot drift apart.
+ */
+export type AnalysisAdvice = {
+  id: AnalysisAdviceId;
+  variant?: 'concentrated' | 'spread';
+  tone: SignalTone;
+};
+
 export type NumberAnalysis = {
   code: string;
   score: number;
-  verdict: string;
+  verdict: AnalysisVerdict;
   confidence: Confidence;
   appearances: number;
-  lastWon: { date: string; prize: string; position: string } | null;
-  parity: string;
+  /** Chance the trailing pair is the next draw, in percent — quoted by the advice. */
+  probability: number;
+  /** How many of the digits are odd, quoted by the risk note. */
+  oddDigits: number;
+  lastWon: { date: string; prize: AnalysisPrize } | null;
+  parity: AnalysisParity;
   digitSum: number;
-  advice: { title: string; body: string; tone: SignalTone }[];
+  advice: AnalysisAdvice[];
   radar: number[];
 };
-
-export type SignalTone = 'high' | 'medium' | 'low' | 'cold';
 
 // ---------------------------------------------------------------------------
 // Radar / model vocabulary
 // ---------------------------------------------------------------------------
 
-export const RADAR_AXES = ['Frequency', 'Recency', 'Seasonality', 'Balance', 'Momentum'] as const;
+/**
+ * The five radar axes, as ids rather than labels.
+ *
+ * The chart *draws* these words around the ring, so the copy has to be translatable;
+ * `my-number.tsx` maps each id to its dictionary entry.
+ */
+export const RADAR_AXES = [
+  'frequency',
+  'recency',
+  'seasonality',
+  'balance',
+  'momentum',
+] as const;
+
+export type RadarAxis = (typeof RADAR_AXES)[number];
 
 export const MODEL_SIGNALS = [
   { key: 'arima', label: 'ARIMA', detail: 'Time-series drift', active: true },
@@ -264,12 +308,8 @@ export function analyzeNumber(input: string): NumberAnalysis {
   const wonRecently = hash01(seed + 5) > 0.5;
 
   const confidence: Confidence = score >= 80 ? 'High' : score >= 65 ? 'Medium' : 'Low';
-  const verdict =
-    score >= 80
-      ? 'Favourable statistical position'
-      : score >= 65
-        ? 'Mild positive signal'
-        : 'Neutral — no strong edge';
+  const verdict: AnalysisVerdict =
+    score >= 80 ? 'favourable' : score >= 65 ? 'mild' : 'neutral';
 
   const digitSum = [...code].reduce((acc, char) => acc + Number(char), 0);
   const oddCount = [...code].filter((char) => Number(char) % 2 === 1).length;
@@ -280,36 +320,29 @@ export function analyzeNumber(input: string): NumberAnalysis {
     verdict,
     confidence,
     appearances,
+    probability,
+    oddDigits: oddCount,
     lastWon: wonRecently
       ? {
           // Real GLO draw dates are the 1st and the 16th, so the mock must not invent
           // a 19th. 16 Aug 2026 is a draw that is actually in the ledger.
           date: '2026-08-16',
-          prize: 'เลขท้าย 2 ตัว',
-          position: 'Top position',
+          prize: 'bottomTwo',
         }
       : null,
-    parity: oddCount === 0 ? 'All even' : oddCount === code.length ? 'All odd' : 'Mixed parity',
+    parity: oddCount === 0 ? 'allEven' : oddCount === code.length ? 'allOdd' : 'mixed',
     digitSum,
     advice: [
       {
-        title: 'Model consensus',
-        body: `Probability of ${probability.toFixed(1)}% for the trailing pair "${code.slice(-2)}", ranked against the current 00-99 grid.`,
+        id: 'consensus',
         tone: score >= 75 ? 'high' : score >= 55 ? 'medium' : 'cold',
       },
       {
-        title: 'Positioning',
-        body:
-          confidence === 'High'
-            ? 'Signals are concentrated in the Top position. Focus exposure there rather than splitting evenly.'
-            : 'Signals are spread across positions. Treat this as a diversification candidate, not a core pick.',
+        id: 'positioning',
+        variant: confidence === 'High' ? 'concentrated' : 'spread',
         tone: confidence === 'High' ? 'high' : confidence === 'Medium' ? 'medium' : 'cold',
       },
-      {
-        title: 'Risk note',
-        body: `Digit sum ${digitSum} with ${oddCount} odd digit${oddCount === 1 ? '' : 's'}. This configuration appeared in ${appearances} of the last 1,284 draws.`,
-        tone: 'low',
-      },
+      { id: 'risk', tone: 'low' },
     ],
     //             Freq  Recency Seasonality Balance Momentum
     radar: [

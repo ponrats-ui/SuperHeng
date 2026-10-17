@@ -4,6 +4,7 @@ export * from './backtest-hook';
 export * from './card';
 export * from './chart-primitives';
 export * from './countdown';
+export * from './credits-footer';
 export * from './header-icon-button';
 export * from './heatmap';
 export * from './language-toggle';

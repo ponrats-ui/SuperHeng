@@ -36,7 +36,7 @@ The app is organised into four bottom-tab screens:
 |---|---|---|
 | **Dashboard** | [`src/app/(tabs)/index.tsx`](src/app/%28tabs%29/index.tsx) | Live countdown to the next draw, the **AI Top Pick** hero (Heng Score gauge + radar profile), top-5 rankings for the 2-digit Top / Bottom positions with probability bars, and the active model ensemble |
 | **My Number** | [`src/app/(tabs)/my-number.tsx`](src/app/%28tabs%29/my-number.tsx) | Analyse any 2–3 digit number (e.g. a licence plate): Heng Score, historical appearance data, radar signal profile and model-derived advice |
-| **Insights** | [`src/app/(tabs)/insights.tsx`](src/app/%28tabs%29/insights.tsx) | Tablet-optimised: tappable **00–99 four-model ensemble heatmap** (Markov · frequency · momentum · Monte Carlo, 25% each), even/odd vs high/low **trend chart** over the last 10 draws, and the **AI reasoning log** |
+| **Insights** | [`src/app/(tabs)/insights.tsx`](src/app/%28tabs%29/insights.tsx) | Tablet-optimised: tappable **00–99 four-model ensemble heatmap** (Markov · frequency · momentum · Monte Carlo, adaptively weighted from each model's last 10 draws), even/odd vs high/low **trend chart** over the last 10 draws, and the **AI reasoning log** |
 | **Performance** | [`src/app/(tabs)/performance.tsx`](src/app/%28tabs%29/performance.tsx) | Transparency & trust: accuracy scorecard, **prize checker**, and an append-only history of published predictions vs actual results |
 
 - 🌗 **Light & dark mode** — deep-navy dark / clean-white light, following the system scheme.
@@ -233,6 +233,12 @@ Signal tones are consistent across every screen: **🟢 high (≥75) · 🟡 med
 🔴 low (35–54) · ⚪ cold (<35)**. See [VISION.md](VISION.md#25-the-ensemble--the-heng-score)
 for how the Heng Score is derived.
 
+The **00–99 heatmap is the deliberate exception**: it colours cells by a fixed quota
+rather than those thresholds — green is the 12 best-ranked codes, gold the next 18, red
+the next 30, grey the bottom 40 — so "HIGH" stays rare and the green band cannot drift
+with the shape of the board. `HEATMAP_BAND_COUNTS` in [`src/lib/heatmap.ts`](src/lib/heatmap.ts)
+is the single source, and the legend prints its numbers.
+
 ---
 
 ## Data Layer & API Integration
@@ -244,7 +250,9 @@ backend will return, so swapping it for real HTTP calls should not require any U
 The **Insights heatmap** is the exception: it is computed on-device from the published
 draws by [`src/lib/heatmap.ts`](src/lib/heatmap.ts), which blends Markov transitions,
 historical frequency, recency-weighted momentum and a 10,000-path Monte Carlo simulation
-at 25% each. It therefore needs `/api/latest-draws` to answer, and it says so when it
+with weights refit from each model's recent walk-forward log score — a 10% floor, a 40%
+ceiling, and the remaining 60% split by skill. The weights it actually used are printed
+under the grid. It therefore needs `/api/latest-draws` to answer, and it says so when it
 cannot.
 
 ```ts
