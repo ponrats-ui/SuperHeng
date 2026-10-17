@@ -43,6 +43,13 @@ export default function Root({ children }: PropsWithChildren) {
           app on Android Chrome.
         */}
         <meta name="theme-color" content="#070B18" />
+        {/*
+          Tells the browser the document is dark, so form controls, scrollbars and
+          the over-scroll gutter are drawn dark from the very first paint — before
+          any JavaScript runs. It also stops Chrome/Safari from reporting a light
+          `prefers-color-scheme` to anything embedded in the page.
+        */}
+        <meta name="color-scheme" content="dark" />
 
         {/* Matches the app's full-height layout on web; see the Expo default document. */}
         <ScrollViewStyleReset />

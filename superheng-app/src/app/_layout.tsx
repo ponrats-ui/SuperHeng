@@ -1,4 +1,4 @@
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { Platform } from 'react-native';
@@ -28,14 +28,22 @@ const MODAL_SCREEN_OPTIONS = {
  * detail, settings, paywall) can be pushed over the tabs without restructuring.
  */
 export default function RootLayout() {
-  const { scheme, colors } = useAppTheme();
+  const { colors } = useAppTheme();
 
-  const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
+  /**
+   * Always `DarkTheme`.
+   *
+   * React Navigation's `DefaultTheme` is what used to reach the navigator when
+   * the OS reported light, and it paints its own near-white `background`/
+   * `card` under every screen — so the app looked light even where our palette
+   * was applied. Picking the dark base outright removes that path instead of
+   * recolouring the light one, and keeps the header/card defaults dark too.
+   */
   const navigationTheme = {
-    ...base,
-    dark: scheme === 'dark',
+    ...DarkTheme,
+    dark: true,
     colors: {
-      ...base.colors,
+      ...DarkTheme.colors,
       primary: colors.primary,
       background: colors.background,
       card: colors.card,
@@ -58,7 +66,8 @@ export default function RootLayout() {
       */}
       <AuthProvider>
         <ThemeProvider value={navigationTheme}>
-          <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+          {/* Light content on the dark background, pinned rather than derived. */}
+          <StatusBar style="light" />
           <AnimatedSplashOverlay />
           <Stack
             screenOptions={{

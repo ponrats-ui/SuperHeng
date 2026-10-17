@@ -103,6 +103,22 @@ export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 /** Hex/rgba color values for both themes. */
 export type Theme = (typeof Colors)[ColorScheme];
 
+/**
+ * The one scheme the app renders in.
+ *
+ * Dark is the product, not a preference: the navy/gold palette *is* the
+ * "premium quant" branding, and light mode diluted it. Two places have to agree
+ * on that — `app.json` pins `userInterfaceStyle` to `dark` so the native shell
+ * (splash, status bar, system dialogs) matches, while this constant is what the
+ * React tree reads, because `userInterfaceStyle` has no effect on web.
+ *
+ * Reading a constant rather than the OS also makes rendering deterministic: the
+ * statically exported pages are already dark when they are generated, so there is
+ * no light-to-dark flash between HTML and first paint. The light palette in
+ * `Colors` is kept intact — point this at a hook to bring system-following back.
+ */
+export const ForcedColorScheme: ColorScheme = 'dark';
+
 export const Fonts = Platform.select({
   ios: {
     /** iOS `UIFontDescriptorSystemDesignDefault` */

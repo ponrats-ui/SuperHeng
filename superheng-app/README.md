@@ -7,8 +7,8 @@ seasonality, transition probabilities, distributional balance and sequence depen
 then publishes an explainable **Heng Score** (0–100) per candidate number.
 
 The interface is deliberately designed like a financial analytics terminal rather than a
-casino: deep-navy dark mode / clean-white light mode, crimson and premium-gold accents,
-and green–amber–grey data tones.
+casino: a deep-navy dark theme (the only theme), crimson and premium-gold accents, and
+green–amber–grey data tones.
 
 > **📐 For the philosophy behind the product and a full specification of the predictive
 > models (ARIMA & Prophet, Markov Chains, Monte Carlo, LSTM), see [VISION.md](VISION.md).**
@@ -39,7 +39,9 @@ The app is organised into four bottom-tab screens:
 | **Insights** | [`src/app/(tabs)/insights.tsx`](src/app/%28tabs%29/insights.tsx) | Tablet-optimised: tappable **00–99 four-model ensemble heatmap** (Markov · frequency · momentum · Monte Carlo, adaptively weighted from each model's last 10 draws), even/odd vs high/low **trend chart** over the last 10 draws, and the **AI reasoning log** |
 | **Performance** | [`src/app/(tabs)/performance.tsx`](src/app/%28tabs%29/performance.tsx) | Transparency & trust: accuracy scorecard, **prize checker**, and an append-only history of published predictions vs actual results |
 
-- 🌗 **Light & dark mode** — deep-navy dark / clean-white light, following the system scheme.
+- 🌘 **Dark by design** — the deep-navy palette is the product, not a preference: the app
+  pins `userInterfaceStyle` and ignores the system's light setting. A light palette still
+  exists in `src/constants/theme.ts` if it is ever needed again.
 - 📱 **Responsive** — single column on phones, multi-column heatmap + charts on tablets.
 - 🔍 **Explainable** — every prediction is accompanied by the reasoning that produced it.
 
@@ -185,9 +187,9 @@ superheng-app/
     │   └── mock.ts             # 🧪 mock analytics payloads (shaped like the future API)
     │
     ├── hooks/
-    │   ├── use-app-theme.ts    # active palette (light/dark)
-    │   ├── use-color-scheme.ts
-    │   └── use-color-scheme.web.ts
+    │   ├── use-app-theme.ts    # active palette
+    │   ├── use-color-scheme.ts # always 'dark' — the system preference is ignored
+    │   └── use-theme.ts        # palette only, for the typed primitives
     │
     ├── lib/
     │   ├── draw.ts             # draw schedule + countdown math
@@ -204,8 +206,14 @@ utilities, data) lives outside it so route files stay thin.
 ## Design System
 
 All design tokens live in [`src/constants/theme.ts`](src/constants/theme.ts) — the single
-source of truth. Both themes expose an identical key set, so `Colors[scheme]` is
+source of truth. Both palettes expose an identical key set, so `Colors[scheme]` is
 interchangeable everywhere.
+
+The app renders in **dark only**. `ForcedColorScheme` in that file is the one switch:
+`app.json` pins `userInterfaceStyle: "dark"` for native, and `useColorScheme()` returns the
+constant so web (where the app.json setting has no effect) cannot boot light either. The
+static export is therefore already dark, and `<html>` carries a dark `color-scheme` plus a
+dark `body` so there is no white flash before hydration.
 
 ```ts
 import { Brand, DataColors, probabilityColor } from '@/constants/theme';

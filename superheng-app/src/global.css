@@ -1,4 +1,7 @@
 :root {
+  /* Applies to form controls, scrollbars and the canvas beyond the app. */
+  color-scheme: dark;
+
   --font-display:
     Spline Sans, Inter, ui-sans-serif, system-ui, sans-serif, Apple Color Emoji, Segoe UI Emoji,
     Segoe UI Symbol, Noto Color Emoji;
@@ -6,4 +9,17 @@
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
   --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
+}
+
+/*
+ * Dark base for the document itself.
+ *
+ * The statically exported HTML paints before the app's own views exist; without
+ * this the browser shows its default white canvas for that first frame, which is
+ * a visible flash on a dark app. Must stay in sync with `Colors.dark.background`
+ * in `constants/theme.ts`.
+ */
+html,
+body {
+  background-color: #070b18;
 }
