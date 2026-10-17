@@ -38,6 +38,21 @@ export const en = {
   'common.switchToThai': 'Switch to Thai',
 
   // ---------------------------------------------------------------------------
+  // Request failures
+  // ---------------------------------------------------------------------------
+  // `ApiError.message` is an English sentence written for whoever is debugging the
+  // client. These are what the reader sees instead: one key per kind/status, with the
+  // HTTP status passed through because it is the detail an operator needs and the one
+  // detail no translation can change. `lib/api-error.ts` does the mapping.
+  'apiError.network': 'Could not reach the server. Check your connection and try again.',
+  'apiError.timeout': 'The server did not answer in time. Try again in a moment.',
+  'apiError.unauthorized': 'That session is no longer valid ({status}). Sign in again.',
+  'apiError.forbidden': 'This account is not allowed to read this ({status}).',
+  'apiError.server': 'The server reported an error ({status}). Try again shortly.',
+  'apiError.unexpected': 'The request failed ({status}). Try again shortly.',
+  'apiError.malformed': 'The server sent a response this app could not read.',
+
+  // ---------------------------------------------------------------------------
   // Navigation + headers
   // ---------------------------------------------------------------------------
   'nav.dashboard': 'Dashboard',
@@ -255,15 +270,15 @@ export const en = {
   'premium.authError.network':
     'Could not reach the account service. Check your connection and try again.',
   'premium.authError.unknown': 'Sign-in failed.',
-  // The value proposition on the locked card, above the password field. Four
-  // checkmarked lines rather than a paragraph: this is the only place the reader
-  // decides whether the door is worth opening, and a bulleted list is scannable
-  // where prose is not.
-  'premium.valueTitle': 'Why unlock Premium',
-  'premium.valueMarkets': 'Unlock 3 Markets: Thai, Lao, & Hanoi',
-  'premium.valueModels': 'Deep Analysis with 4 Advanced AI Models',
-  'premium.valuePositions': 'Exact Positional Probability',
-  'premium.valueRealtime': 'Real-time Data & Trend Updates',
+  // The value proposition on **every** locked card, above the sign-in form and above
+  // the upgrade button. Four checkmarked lines rather than a paragraph: this is the
+  // only place the reader decides whether the door is worth opening, and a bulleted
+  // list is scannable where prose is not.
+  'premium.benefitsTitle': 'Premium Benefits',
+  'premium.valueMarkets': 'Unlock all 3 markets (Thai, Lao, Hanoi)',
+  'premium.valueModels': 'Deep analysis with all 4 AI models (ARIMA, Markov, Bayesian, Frequency)',
+  'premium.valuePositions': 'Exact positional probability, leading digit to units',
+  'premium.valueRealtime': 'Real-time results and trend updates',
   'premium.lockedPill': '🔒 PREMIUM',
   'premium.gateNote':
     'Your account is used only to check the subscription. The dashboard, the ledger and ' +
@@ -589,16 +604,55 @@ export const en = {
   // ---------------------------------------------------------------------------
   // Other screens
   // ---------------------------------------------------------------------------
+  'insights.subtitle': 'Deep insights',
+  'insights.gridBadge': '00–99 GRID',
   'insights.trendTitle': 'Trend',
   'insights.trendSubtitle': 'Share of even digits and high digits over time',
   'insights.parity': 'Even / Odd',
   'insights.range': 'High / Low',
   'insights.heatmapTitle': 'Frequency heatmap',
   'insights.heatmapSubtitle': 'Every 2-digit code · darker is drawn more often',
-  'insights.aiLogTitle': 'AI log',
+  'insights.heatmapHint': 'Tap a cell to analyse that number',
+  'insights.legendLow': 'Low',
+  'insights.legendHigh': 'High',
+  'insights.parityNote':
+    'Share of odd digits per draw. Spikes above 50% suggest a parity tilt.',
+  'insights.rangeNote':
+    'Share of high digits (5–9) per draw. Useful for band selection.',
+  'insights.aiLogTitle': 'AI reasoning log',
+  'insights.aiLogSubtitle': 'Why the model predicts what it predicts',
+  // Stated, not hidden. These four entries are hand-written illustrations: no model
+  // emits a reasoning log yet, and the backend's own numbers contradict some of the
+  // claims below (the Markov transition, for one). Shipping them as if they were
+  // produced by the last run would be a fabricated explanation of a real prediction,
+  // so the panel says what it is until it is wired to `/api/predict/basic`'s evidence.
+  'insights.aiLogSample':
+    'Illustrative example — this panel is not generated from a live model run yet.',
   'insights.logGenerated': 'Log generated {date} · updates each draw cycle',
   'insights.odd': 'Odd %',
   'insights.high': 'High (5–9) %',
+  'confidence.high': 'High',
+  'confidence.medium': 'Medium',
+  'confidence.low': 'Low',
+  // The log's four entries. The `tag` stays a model name in both languages (see the
+  // vocabulary note at the top of `th.ts`); everything else is the dictionary's job.
+  'insights.log.log1.headline': 'Q4 drift detected on the "4x" band',
+  'insights.log.log1.detail':
+    'Numbers ending in 4 outperform their 12-draw baseline by 24% in the final ' +
+    'quarter. The effect is strongest in the Top position and has held for three ' +
+    'consecutive cycles.',
+  'insights.log.log2.headline': 'Transition 93 → 48 has elevated weight',
+  'insights.log.log2.detail':
+    'The transition matrix gives 48 a 0.31 conditional probability after 93 is ' +
+    'drawn, roughly 1.9x its unconditional rate.',
+  'insights.log.log3.headline': '10,000 simulations cluster on low-mid pairs',
+  'insights.log.log3.detail':
+    'Across 10k simulated draws the low-mid band (10-59) appeared in 58% of ' +
+    'Top-position outcomes, versus 50% expected uniformly.',
+  'insights.log.log4.headline': 'Volatility compression before the draw',
+  'insights.log.log4.detail':
+    '(1,1,1) residuals show narrowing variance in the last 5 draws, historically a ' +
+    'precursor to a higher-conviction prediction.',
 
   'myNumber.title': 'Check a number',
   'myNumber.subtitle': 'Type any 2-digit code to see what the models say about it',
@@ -609,11 +663,80 @@ export const en = {
   'myNumber.lastWon': 'Last seen {date}',
   'myNumber.noRecent': 'No recent hit',
 
+  // ---------------------------------------------------------------------------
+  // Performance (/performance) — scorecard, prize checker, prediction history
+  // ---------------------------------------------------------------------------
+  // This screen used to render hardcoded English beside hardcoded numbers. Both are
+  // gone: every string is a key here, and every figure comes from `/api/backtest` or
+  // `/api/predict/basic`, so a new draw appears without an edit.
+  'performance.title': 'Performance & transparency',
+  'performance.scorecardTitle': 'AI scorecard',
+  'performance.scorecardSubtitle': 'Thai ledger · {draws} draw(s) replayed',
+  'performance.scorecardSubtitleFallback': 'Thai ledger · walk-forward replay',
   'performance.hitRate': 'Hit rate',
   'performance.top5Rate': 'Top-5 rate',
+  'performance.uniformBaseline': 'uniform {rate}',
+  'performance.drawsScored': 'Draws scored',
+  'performance.drawsRequested': 'of {requested} requested',
+  'performance.pValue': 'p-value',
+  'performance.significant': 'significant',
+  'performance.notSignificant': 'not significant',
+  'performance.replaying': 'Replaying the recent draws…',
+  'performance.scoring': 'Scoring the recent draws…',
+  'performance.replayFailed': 'The replay request failed.',
+  'performance.requestFailed': 'The request failed ({status}).',
+  'performance.channelUnavailable':
+    'This ledger published no 2-digit channel for the window.',
+  'performance.notEnoughHistory': 'There is not enough history to score yet.',
+  'performance.retry': 'Retry',
+
+  // Prize checker — against the draw that was actually published.
   'performance.prizeChecker': 'Prize checker',
   'performance.latestResult': 'Latest result · {date}',
-  'performance.historyTitle': 'Recent draws',
+  'performance.latestResultWithPrize': 'Latest result · {date} · {prize}',
+  'performance.latestResultLoading': 'Loading the latest result…',
+  'performance.latestResultUnavailable': 'Latest result unavailable',
+  'performance.ticketLabel': 'Ticket number',
+  'performance.ticketPlaceholder': 'Enter ticket number',
+  'performance.check': 'Check',
+  'performance.winner': 'Winner — {label}',
+  'performance.noPrize': 'No prize for this draw',
+  'performance.tierAllSix': 'All 6 digits',
+  'performance.tierFirstPrize': 'First prize (รางวัลที่ 1)',
+  'performance.tierLastTwoDigits': 'Last 2 digits',
+  'performance.tierLastTwo': 'Last two (เลขท้าย 2 ตัว)',
+  'performance.amountFirstPrize': '฿ 6,000,000',
+  'performance.amountLastTwo': '฿ 2,000',
+  'performance.matchFirstPrize': 'Exact First prize match · {prize}',
+  'performance.matchLastTwo': 'Last two digits match · {digits}',
+  'performance.noPrizeDetail':
+    'Against {date}: first prize {first}, last two {bottom}.',
+  'performance.noPrizePending': 'The latest published result has not loaded yet.',
+  'performance.prizeScope':
+    'Only the two prizes this ledger publishes are checked: the exact six-digit ' +
+    'first prize (รางวัลที่ 1) and the separately drawn last two (เลขท้าย 2 ตัว).',
+
+  // Prediction history — the replay, newest draw first.
+  'performance.historyTitle': 'Prediction history',
+  'performance.historySubtitle': 'Walk-forward replay · {from} → {to}',
+  'performance.historySubtitleFallback': 'Model pick vs. actual result',
+  'performance.latestDraw': 'Latest draw',
+  'performance.aiPredicted': 'AI predicted',
+  'performance.actualResult': 'Actual result',
+  'performance.hit': 'HIT',
+  'performance.miss': 'MISS',
+  'performance.inTop5': 'IN TOP 5',
+  'performance.actual': 'ACTUAL',
+  'performance.channelBottom': 'bottom two (เลขท้าย 2 ตัว)',
+  'performance.channelTop': 'top two (first prize tail)',
+  'performance.historyRowNote':
+    "Each row is the model's {channel} pick beside the number that was drawn, " +
+    'newest first.',
+  'performance.historyReplayNote':
+    'This is a replay, not a record: the service stores no prediction when it makes ' +
+    'one, so every pick here was computed from the draws before it and then marked ' +
+    'against the published result — the same walk-forward rule the Backtest tab ' +
+    'measures.',
   'performance.disclaimer':
     'Past performance does not predict future draws. Every draw is independent.',
 

@@ -15,42 +15,78 @@ import { ThemedText } from '@/components/themed-text';
 import { DataColors, Radius, Spacing, TabletContentWidth } from '@/constants/theme';
 import { AI_LOG, TREND_SERIES, buildHeatmap } from '@/data/mock';
 import { useAppTheme } from '@/hooks/use-app-theme';
-import { formatDate } from '@/lib/format';
+import { formatLocalizedDate } from '@/lib/format';
+import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
 type TrendMode = 'parity' | 'range';
-
-const TREND_OPTIONS = [
-  { key: 'parity' as const, label: 'Even / Odd' },
-  { key: 'range' as const, label: 'High / Low' },
-];
 
 /** Widest layout switches to two columns. */
 const TWO_COLUMN_BREAKPOINT = 760;
 
+/**
+ * Where each hand-written log entry's copy lives.
+ *
+ * The log stays keyed by `id` in `mock.ts` while its text lives in the dictionaries,
+ * because the alternative — translating in the data module — would import the i18n
+ * layer into mock data and make one string unrenderable in the other language. A
+ * missing id falls back to the entry's own `id`, which is visibly wrong on screen
+ * rather than silently reusing another entry's words.
+ */
+const LOG_COPY: Record<string, { headline: TranslationKey; detail: TranslationKey }> = {
+  'log-1': { headline: 'insights.log.log1.headline', detail: 'insights.log.log1.detail' },
+  'log-2': { headline: 'insights.log.log2.headline', detail: 'insights.log.log2.detail' },
+  'log-3': { headline: 'insights.log.log3.headline', detail: 'insights.log.log3.detail' },
+  'log-4': { headline: 'insights.log.log4.headline', detail: 'insights.log.log4.detail' },
+};
+
+const CONFIDENCE_KEYS = {
+  High: 'confidence.high',
+  Medium: 'confidence.medium',
+  Low: 'confidence.low',
+} as const satisfies Record<string, TranslationKey>;
+
 export default function InsightsScreen() {
   const { colors } = useAppTheme();
+  const { t, language } = useTranslation();
   const { width } = useWindowDimensions();
   const [mode, setMode] = useState<TrendMode>('parity');
 
   const twoColumn = width >= TWO_COLUMN_BREAKPOINT;
   const cells = buildHeatmap();
 
+  const trendOptions = [
+    { key: 'parity' as const, label: t('insights.parity') },
+    { key: 'range' as const, label: t('insights.range') },
+  ];
+
   // Chart reads oldest -> newest left to right.
   const chronological = [...TREND_SERIES].reverse();
   const series =
     mode === 'parity'
-      ? [{ label: 'Odd %', color: colors.primary, values: chronological.map((p) => p.odd) }]
-      : [{ label: 'High (5-9) %', color: colors.gold, values: chronological.map((p) => p.high) }];
+      ? [
+          {
+            label: t('insights.odd'),
+            color: colors.primary,
+            values: chronological.map((p) => p.odd),
+          },
+        ]
+      : [
+          {
+            label: t('insights.high'),
+            color: colors.gold,
+            values: chronological.map((p) => p.high),
+          },
+        ];
   const xLabels = chronological.map((p) => `${p.draw}`);
 
   return (
     <PageScaffold maxWidth={TabletContentWidth}>
       <AppHeader
-        subtitle="Deep insights"
+        subtitle={t('insights.subtitle')}
         right={
           <View style={[styles.badge, { backgroundColor: colors.backgroundElement }]}>
             <ThemedText type="small" style={[styles.badgeText, { color: colors.textSecondary }]}>
-              00–99 GRID
+              {t('insights.gridBadge')}
             </ThemedText>
           </View>
         }
@@ -61,8 +97,8 @@ export default function InsightsScreen() {
         <View style={styles.column}>
           <Card>
             <SectionHeader
-              title="Probability heatmap"
-              subtitle="Tap a cell to analyse that number"
+              title={t('insights.heatmapTitle')}
+              subtitle={t('insights.heatmapSubtitle')}
             />
             <View style={styles.heatmapWrap}>
               <Heatmap
@@ -70,15 +106,18 @@ export default function InsightsScreen() {
                 onSelect={(code) => router.push({ pathname: '/my-number', params: { code } })}
               />
             </View>
+            <ThemedText type="small" themeColor="textMuted" style={styles.chartNote}>
+              {t('insights.heatmapHint')}
+            </ThemedText>
             <View style={styles.legend}>
               <ThemedText type="small" themeColor="textMuted" style={styles.legendLabel}>
-                Low
+                {t('insights.legendLow')}
               </ThemedText>
               {[DataColors.cold, DataColors.low, DataColors.medium, DataColors.high].map((color) => (
                 <View key={color} style={[styles.legendSwatch, { backgroundColor: color }]} />
               ))}
               <ThemedText type="small" themeColor="textMuted" style={styles.legendLabel}>
-                High
+                {t('insights.legendHigh')}
               </ThemedText>
             </View>
           </Card>
@@ -87,22 +126,23 @@ export default function InsightsScreen() {
         {/* Charts + log */}
         <View style={styles.column}>
           <Card>
-            <SectionHeader title="Trends" subtitle="Last 10 draws" />
+            <SectionHeader title={t('insights.trendTitle')} subtitle={t('insights.trendSubtitle')} />
             <View style={styles.controlRow}>
-              <SegmentedControl options={TREND_OPTIONS} value={mode} onChange={setMode} />
+              <SegmentedControl options={trendOptions} value={mode} onChange={setMode} />
             </View>
             <View style={styles.chartWrap}>
               <TrendChart series={series} xLabels={xLabels} height={176} />
             </View>
             <ThemedText type="small" themeColor="textMuted" style={styles.chartNote}>
-              {mode === 'parity'
-                ? 'Share of odd digits per draw. Spikes above 50% suggest a parity tilt.'
-                : 'Share of high digits (5-9) per draw. Useful for band selection.'}
+              {mode === 'parity' ? t('insights.parityNote') : t('insights.rangeNote')}
             </ThemedText>
           </Card>
 
           <Card>
-            <SectionHeader title="AI reasoning log" subtitle="Why the model predicts what it predicts" />
+            <SectionHeader
+              title={t('insights.aiLogTitle')}
+              subtitle={t('insights.aiLogSubtitle')}
+            />
             <View style={styles.logList}>
               {AI_LOG.map((entry) => {
                 const tone =
@@ -111,6 +151,7 @@ export default function InsightsScreen() {
                     : entry.confidence === 'Medium'
                       ? DataColors.medium
                       : DataColors.cold;
+                const copy = LOG_COPY[entry.id];
                 return (
                   <View key={entry.id} style={[styles.logItem, { borderLeftColor: tone }]}>
                     <View style={styles.logTop}>
@@ -120,19 +161,26 @@ export default function InsightsScreen() {
                         </ThemedText>
                       </View>
                       <ThemedText type="small" themeColor="textMuted" style={styles.logConfidence}>
-                        {entry.confidence}
+                        {t(CONFIDENCE_KEYS[entry.confidence])}
                       </ThemedText>
                     </View>
-                    <ThemedText type="smallBold">{entry.headline}</ThemedText>
+                    <ThemedText type="smallBold">
+                      {copy ? t(copy.headline) : entry.id}
+                    </ThemedText>
                     <ThemedText type="small" themeColor="textSecondary" style={styles.logBody}>
-                      {entry.detail}
+                      {copy ? t(copy.detail) : ''}
                     </ThemedText>
                   </View>
                 );
               })}
             </View>
+            <ThemedText type="small" themeColor="textMuted" style={styles.logSample}>
+              {t('insights.aiLogSample')}
+            </ThemedText>
             <ThemedText type="small" themeColor="textMuted" style={styles.logFooter}>
-              Log generated {formatDate(new Date().toISOString())} · updates each draw cycle
+              {t('insights.logGenerated', {
+                date: formatLocalizedDate(new Date(), language),
+              })}
             </ThemedText>
           </Card>
         </View>
@@ -229,8 +277,13 @@ const styles = StyleSheet.create({
   logBody: {
     lineHeight: 19,
   },
+  logSample: {
+    fontSize: 10,
+    lineHeight: 15,
+    marginTop: Spacing.three,
+  },
   logFooter: {
     fontSize: 10,
-    marginTop: Spacing.three,
+    marginTop: Spacing.one,
   },
 });

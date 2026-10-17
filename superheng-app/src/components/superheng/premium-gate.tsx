@@ -7,7 +7,8 @@ import { LegalDisclaimer } from '@/components/superheng/legal-disclaimer';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
-import { getCheckoutPlans, type CheckoutCatalogue } from '@/lib/api';
+import { getCheckoutPlans, type ApiError, type CheckoutCatalogue } from '@/lib/api';
+import { apiErrorText } from '@/lib/api-error';
 import { useAuth } from '@/lib/auth';
 import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
@@ -203,23 +204,7 @@ export function PremiumGate({ children }: PremiumGateProps) {
           {t('premium.accessSubtitle')}
         </ThemedText>
 
-        <View style={[styles.value, { borderColor: `${colors.gold}40`, backgroundColor: `${colors.gold}0D` }]}>
-          <ThemedText style={[styles.valueTitle, { color: colors.accent }]}>
-            {t('premium.valueTitle')}
-          </ThemedText>
-          {FEATURE_KEYS.map((key) => (
-            <View key={key} style={styles.feature}>
-              <View style={[styles.check, { borderColor: `${colors.gold}80`, backgroundColor: `${colors.gold}26` }]}>
-                <ThemedText type="small" style={[styles.checkMark, { color: colors.accent }]}>
-                  ✓
-                </ThemedText>
-              </View>
-              <ThemedText type="small" style={styles.featureText}>
-                {t(key)}
-              </ThemedText>
-            </View>
-          ))}
-        </View>
+        <PremiumBenefits />
 
         <View style={[styles.divider, { backgroundColor: `${colors.gold}33` }]} />
 
@@ -260,31 +245,24 @@ export function PremiumGate({ children }: PremiumGateProps) {
       </ThemedText>
 
       {/*
+        The same value proposition the signed-out card carries. It belongs here too:
+        this is the reader who has an account and no subscription, so "what would I
+        actually get" is the question standing between them and the upgrade button —
+        and the answer used to be missing on precisely this card.
+      */}
+      <PremiumBenefits />
+
+      {/*
         Signed in but the entitlement could not be read — a cold backend, or the
         `user_profiles` table not yet created. Reported as its own state rather than
         as "no subscription", because the two need different actions from the user
         and from the operator.
       */}
       {auth.accountFailure ? (
-        <View
-          accessibilityRole="alert"
-          style={[styles.notice, { borderColor: `${colors.danger}66`, backgroundColor: `${colors.danger}14` }]}>
-          <ThemedText type="small" style={styles.noticeText}>
-            {t('premium.accountUnreadable')}
-          </ThemedText>
-          <ThemedText type="small" themeColor="textMuted" style={styles.noticeDetail}>
-            {auth.accountFailure.message}
-          </ThemedText>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('common.retry')}
-            onPress={() => void auth.refreshAccount()}
-            style={({ pressed }) => [styles.retryInline, pressed && styles.pressed]}>
-            <ThemedText type="small" style={[styles.linkText, { color: colors.accent }]}>
-              {t('common.retry')}
-            </ThemedText>
-          </Pressable>
-        </View>
+        <AccountProblem
+          failure={auth.accountFailure}
+          onRetry={() => void auth.refreshAccount()}
+        />
       ) : null}
 
       {auth.account?.profile_missing ? (
@@ -352,6 +330,86 @@ export function PremiumGate({ children }: PremiumGateProps) {
         </Pressable>
       </View>
     </Panel>
+  );
+}
+
+/**
+ * The entitlement could not be read — reported as its own state, in Thai.
+ *
+ * It used to print `ApiError.message`, which is an English sentence written for a
+ * developer, on a screen the rest of which is translated. The classification now
+ * comes from `lib/api-error.ts`; the raw status stays visible because it is what an
+ * operator looks for first.
+ */
+function AccountProblem({ failure, onRetry }: { failure: ApiError; onRetry: () => void }) {
+  const { colors } = useAppTheme();
+  const { t } = useTranslation();
+  const text = apiErrorText(failure);
+
+  return (
+    <View
+      accessibilityRole="alert"
+      style={[
+        styles.notice,
+        { borderColor: `${colors.danger}66`, backgroundColor: `${colors.danger}14` },
+      ]}>
+      <ThemedText type="small" style={styles.noticeText}>
+        {t('premium.accountUnreadable')}
+      </ThemedText>
+      <ThemedText type="small" themeColor="textMuted" style={styles.noticeDetail}>
+        {t(text.key, text.params)}
+      </ThemedText>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('common.retry')}
+        onPress={onRetry}
+        style={({ pressed }) => [styles.retryInline, pressed && styles.pressed]}>
+        <ThemedText type="small" style={[styles.linkText, { color: colors.accent }]}>
+          {t('common.retry')}
+        </ThemedText>
+      </Pressable>
+    </View>
+  );
+}
+
+/**
+ * The value proposition, on every locked card.
+ *
+ * One component rather than a copy in each branch: the signed-out card used to be the
+ * only place it appeared, and the signed-in-without-a-subscription card — the one where
+ * it is actually decisive — did not carry it at all. Extracting it means the two cannot
+ * drift back apart.
+ */
+function PremiumBenefits() {
+  const { colors } = useAppTheme();
+  const { t } = useTranslation();
+
+  return (
+    <View
+      style={[
+        styles.value,
+        { borderColor: `${colors.gold}40`, backgroundColor: `${colors.gold}0D` },
+      ]}>
+      <ThemedText style={[styles.valueTitle, { color: colors.accent }]}>
+        {t('premium.benefitsTitle')}
+      </ThemedText>
+      {FEATURE_KEYS.map((key) => (
+        <View key={key} style={styles.feature}>
+          <View
+            style={[
+              styles.check,
+              { borderColor: `${colors.gold}80`, backgroundColor: `${colors.gold}26` },
+            ]}>
+            <ThemedText type="small" style={[styles.checkMark, { color: colors.accent }]}>
+              ✓
+            </ThemedText>
+          </View>
+          <ThemedText type="small" style={styles.featureText}>
+            {t(key)}
+          </ThemedText>
+        </View>
+      ))}
+    </View>
   );
 }
 

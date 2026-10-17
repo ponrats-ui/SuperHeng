@@ -54,6 +54,17 @@ export const th: Record<TranslationKey, string> = {
   'common.switchToEnglish': 'เปลี่ยนเป็นภาษาอังกฤษ',
   'common.switchToThai': 'เปลี่ยนเป็นภาษาไทย',
 
+  // ข้อผิดพลาดจากการเรียก API: ข้อความดิบใน ApiError เป็นภาษาอังกฤษสำหรับนักพัฒนา
+  // ส่วนที่ผู้ใช้เห็นคือชุดคำด้านล่าง โดยคงรหัส HTTP ไว้เพราะเป็นข้อมูลชิ้นเดียวที่
+  // ผู้ดูแลระบบต้องใช้ และไม่ขึ้นกับภาษา
+  'apiError.network': 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบการเชื่อมต่อแล้วลองใหม่',
+  'apiError.timeout': 'เซิร์ฟเวอร์ไม่ตอบสนองในเวลาที่กำหนด กรุณาลองใหม่',
+  'apiError.unauthorized': 'เซสชันนี้ใช้ไม่ได้แล้ว ({status}) กรุณาเข้าสู่ระบบใหม่',
+  'apiError.forbidden': 'บัญชีนี้ไม่มีสิทธิ์เข้าถึงข้อมูลนี้ ({status})',
+  'apiError.server': 'เซิร์ฟเวอร์รายงานข้อผิดพลาด ({status}) กรุณาลองใหม่ภายหลัง',
+  'apiError.unexpected': 'คำขอล้มเหลว ({status}) กรุณาลองใหม่ภายหลัง',
+  'apiError.malformed': 'เซิร์ฟเวอร์ส่งข้อมูลที่แอปอ่านไม่ได้',
+
   // Navigation + headers
   'nav.dashboard': 'หน้าหลัก',
   'nav.myNumber': 'เลขของฉัน',
@@ -231,11 +242,11 @@ export const th: Record<TranslationKey, string> = {
   'premium.authError.unknown': 'เข้าสู่ระบบไม่สำเร็จ',
   // คุณค่าที่แสดงบนการ์ดล็อก เหนือช่องรหัสผ่าน — ชื่อโมเดลคงไว้เป็น Latin
   // ตามตารางคำศัพท์ในหัวไฟล์ (ARIMA, Markov, Bayesian) เพราะทับศัพท์แล้วจำยากกว่า
-  'premium.valueTitle': 'ทำไมต้องปลดล็อก Premium',
-  'premium.valueMarkets': 'ปลดล็อกครบ 3 ตลาด: ไทย, ลาว, และฮานอย',
-  'premium.valueModels': 'วิเคราะห์เจาะลึกด้วย AI ขั้นสูง 4 โมเดล (ARIMA, Markov, Bayesian, Frequency)',
-  'premium.valuePositions': 'เจาะจงความน่าจะเป็นรายตำแหน่ง (หลักพันถึงหลักหน่วย)',
-  'premium.valueRealtime': 'อัปเดตสถิติและเทรนด์แบบ Real-time',
+  'premium.benefitsTitle': 'สิทธิประโยชน์ Premium',
+  'premium.valueMarkets': 'ปลดล็อกครบ 3 ตลาด (ไทย, ลาว, ฮานอย)',
+  'premium.valueModels': 'ดูการวิเคราะห์เชิงลึก AI ครบ 4 โมเดล (ARIMA, Markov, Bayesian, Frequency)',
+  'premium.valuePositions': 'เจาะจงความน่าจะเป็นรายตำแหน่ง (หลักแสนถึงหลักหน่วย)',
+  'premium.valueRealtime': 'อัปเดตผลและเทรนด์แบบ Real-time',
   'premium.lockedPill': '🔒 Premium',
   'premium.gateNote':
     'บัญชีของคุณใช้เพียงเพื่อตรวจสอบสถานะสมาชิกเท่านั้น แดชบอร์ด ผลรางวัล และการทดสอบย้อนหลังยังฟรีและไม่ต้องใช้บัญชี',
@@ -491,16 +502,44 @@ export const th: Record<TranslationKey, string> = {
   'rank.uniformLift': '{lift}× อัตราฐาน',
 
   // Other screens
+  'insights.subtitle': 'เจาะลึกเชิงสถิติ',
+  'insights.gridBadge': 'ตาราง 00–99',
   'insights.trendTitle': 'แนวโน้ม',
   'insights.trendSubtitle': 'สัดส่วนเลขคู่และเลขสูงตามช่วงเวลา',
   'insights.parity': 'คู่ / คี่',
   'insights.range': 'สูง / ต่ำ',
   'insights.heatmapTitle': 'แผนความถี่',
   'insights.heatmapSubtitle': 'ทุกเลข 2 หลัก · สีเข้มคือออกบ่อยกว่า',
-  'insights.aiLogTitle': 'บันทึก AI',
+  'insights.heatmapHint': 'แตะช่องเพื่อวิเคราะห์เลขนั้น',
+  'insights.legendLow': 'ต่ำ',
+  'insights.legendHigh': 'สูง',
+  'insights.parityNote': 'สัดส่วนเลขคี่ในแต่ละงวด ค่าที่เกิน 50% บ่งชี้ว่าช่วงนั้นเอียงไปทางเลขคี่',
+  'insights.rangeNote': 'สัดส่วนเลขสูง (5–9) ในแต่ละงวด ใช้ประกอบการเลือกช่วงเลข',
+  'insights.aiLogTitle': 'บันทึกเหตุผล AI',
+  'insights.aiLogSubtitle': 'ทำไมโมเดลจึงทำนายเช่นนั้น',
+  // ต้องบอกให้ชัด: ข้อความสี่รายการนี้เป็นตัวอย่างที่เขียนขึ้นเอง ยังไม่มีโมเดลไหน
+  // ส่งบันทึกเหตุผลออกมา และตัวเลขจริงใน backend ขัดกับบางข้อความข้างล่าง
+  'insights.aiLogSample': 'ตัวอย่างประกอบ — แผงนี้ยังไม่ได้สร้างจากผลการรันโมเดลจริง',
   'insights.logGenerated': 'สร้างบันทึกเมื่อ {date} · อัปเดตทุกงวด',
   'insights.odd': 'คี่ %',
   'insights.high': 'สูง (5–9) %',
+  'confidence.high': 'สูง',
+  'confidence.medium': 'ปานกลาง',
+  'confidence.low': 'ต่ำ',
+  // ชื่อแท็ก (Seasonal/Markov/Monte Carlo/ARIMA) คงไว้เป็นภาษาอังกฤษตามตารางคำศัพท์
+  // ในหัวไฟล์ ส่วนหัวข้อและคำอธิบายแปลเป็นไทย
+  'insights.log.log1.headline': 'พบการเอียงเชิงฤดูกาลช่วงไตรมาส 4 ในกลุ่มเลขลงท้าย 4',
+  'insights.log.log1.detail':
+    'เลขที่ลงท้ายด้วย 4 ทำผลได้ดีกว่าค่าฐาน 12 งวดอยู่ 24% ในไตรมาสสุดท้าย ผลชัดที่สุดในตำแหน่งบนและต่อเนื่องกันสามรอบ',
+  'insights.log.log2.headline': 'การเปลี่ยนสถานะ 93 → 48 มีน้ำหนักสูงกว่าปกติ',
+  'insights.log.log2.detail':
+    'เมทริกซ์การเปลี่ยนสถานะให้ความน่าจะเป็นแบบมีเงื่อนไข 0.31 กับ 48 เมื่อ 93 ออก คิดเป็นราว 1.9 เท่าของอัตราปกติ',
+  'insights.log.log3.headline': 'จำลอง 10,000 ครั้ง กระจุกที่คู่เลขต่ำ-กลาง',
+  'insights.log.log3.detail':
+    'จากการจำลอง 10,000 งวด กลุ่มต่ำ-กลาง (10–59) ปรากฏในผลตำแหน่งบน 58% เทียบกับ 50% ที่คาดจากการกระจายสม่ำเสมอ',
+  'insights.log.log4.headline': 'ความผันผวนลดลงก่อนวันออกรางวัล',
+  'insights.log.log4.detail':
+    'เศษที่เหลือจากแบบจำลอง (1,1,1) มีความแปรปรวนแคบลงใน 5 งวดล่าสุด ซึ่งในอดีตมักนำไปสู่คำทำนายที่มั่นใจขึ้น',
 
   'myNumber.title': 'ตรวจเลข',
   'myNumber.subtitle': 'พิมพ์เลข 2 หลักเพื่อดูว่าแบบจำลองว่าอย่างไร',
@@ -511,11 +550,63 @@ export const th: Record<TranslationKey, string> = {
   'myNumber.lastWon': 'ออกล่าสุด {date}',
   'myNumber.noRecent': 'ยังไม่เคยออกล่าสุด',
 
+  // Performance (/performance) — คะแนน ตรวจรางวัล และประวัติการทายผล
+  'performance.title': 'ผลงานและความโปร่งใส',
+  'performance.scorecardTitle': 'คะแนน AI',
+  'performance.scorecardSubtitle': 'ตลาดไทย · ทายย้อนหลัง {draws} งวด',
+  'performance.scorecardSubtitleFallback': 'ตลาดไทย · ทายย้อนหลังแบบเดินหน้า',
   'performance.hitRate': 'อัตราทายถูก',
   'performance.top5Rate': 'อัตราติด 5 อันดับ',
+  'performance.uniformBaseline': 'ฐานสุ่ม {rate}',
+  'performance.drawsScored': 'งวดที่ตรวจ',
+  'performance.drawsRequested': 'จากที่ขอ {requested} งวด',
+  'performance.pValue': 'ค่า p',
+  'performance.significant': 'มีนัยสำคัญ',
+  'performance.notSignificant': 'ยังไม่มีนัยสำคัญ',
+  'performance.replaying': 'กำลังทายย้อนหลังงวดล่าสุด…',
+  'performance.scoring': 'กำลังตรวจผลงวดล่าสุด…',
+  'performance.replayFailed': 'คำขอทายย้อนหลังล้มเหลว',
+  'performance.requestFailed': 'คำขอล้มเหลว ({status})',
+  'performance.channelUnavailable': 'ตลาดนี้ไม่มีช่องเลขท้าย 2 ตัวในช่วงเวลานี้',
+  'performance.notEnoughHistory': 'ยังมีข้อมูลย้อนหลังไม่พอสำหรับตรวจผล',
+  'performance.retry': 'ลองใหม่',
   'performance.prizeChecker': 'ตรวจรางวัล',
   'performance.latestResult': 'ผลล่าสุด · {date}',
-  'performance.historyTitle': 'งวดล่าสุด',
+  'performance.latestResultWithPrize': 'ผลล่าสุด · {date} · {prize}',
+  'performance.latestResultLoading': 'กำลังโหลดผลล่าสุด…',
+  'performance.latestResultUnavailable': 'โหลดผลล่าสุดไม่สำเร็จ',
+  'performance.ticketLabel': 'หมายเลขสลาก',
+  'performance.ticketPlaceholder': 'กรอกหมายเลขสลาก',
+  'performance.check': 'ตรวจสอบ',
+  'performance.winner': 'ถูกรางวัล — {label}',
+  'performance.noPrize': 'ไม่ถูกรางวัลในงวดนี้',
+  'performance.tierAllSix': 'ครบ 6 หลัก',
+  'performance.tierFirstPrize': 'รางวัลที่ 1',
+  'performance.tierLastTwoDigits': '2 หลักท้าย',
+  'performance.tierLastTwo': 'เลขท้าย 2 ตัว',
+  'performance.amountFirstPrize': '฿ 6,000,000',
+  'performance.amountLastTwo': '฿ 2,000',
+  'performance.matchFirstPrize': 'ตรงรางวัลที่ 1 · {prize}',
+  'performance.matchLastTwo': 'ตรงเลขท้าย 2 ตัว · {digits}',
+  'performance.noPrizeDetail': 'เทียบกับงวด {date}: รางวัลที่ 1 {first} · เลขท้าย 2 ตัว {bottom}',
+  'performance.noPrizePending': 'ยังโหลดผลรางวัลล่าสุดไม่เสร็จ',
+  'performance.prizeScope':
+    'ตรวจเฉพาะสองรางวัลที่ตลาดนี้เผยแพร่ คือ รางวัลที่ 1 (6 หลักตรงตัว) และเลขท้าย 2 ตัว ซึ่งออกรางวัลแยกจากกัน',
+  'performance.historyTitle': 'ประวัติการทายผล AI',
+  'performance.historySubtitle': 'ทายย้อนหลัง · {from} → {to}',
+  'performance.historySubtitleFallback': 'คำทำนายของ AI เทียบผลออกรางวัล',
+  'performance.latestDraw': 'งวดล่าสุด',
+  'performance.aiPredicted': 'AI ทำนาย',
+  'performance.actualResult': 'ผลออกรางวัล',
+  'performance.hit': 'ถูกรางวัล',
+  'performance.miss': 'ไม่ถูก',
+  'performance.inTop5': 'ติด 5 อันดับ',
+  'performance.actual': 'ผลจริง',
+  'performance.channelBottom': 'เลขท้าย 2 ตัว',
+  'performance.channelTop': 'สองตัวท้ายรางวัลที่ 1',
+  'performance.historyRowNote': 'แต่ละแถวคือคำทำนายช่อง {channel} ของโมเดล เทียบกับเลขที่ออกจริง เรียงจากใหม่ไปเก่า',
+  'performance.historyReplayNote':
+    'นี่คือการคำนวณย้อนหลัง ไม่ใช่บันทึกคำทำนาย: ระบบไม่ได้เก็บคำทำนายไว้ตอนที่คำนวณ ทุกคำทำนายจึงคำนวณจากงวดก่อนหน้าแล้วนำมาเทียบกับผลที่ประกาศจริง ด้วยกฎเดียวกับการทดสอบย้อนหลังในแท็บ Backtest',
   'performance.disclaimer': 'ผลในอดีตไม่ทำนายงวดถัดไป ทุกงวดเป็นอิสระต่อกัน',
 
   // About (/about)

@@ -111,20 +111,17 @@ export type TrendPoint = {
   high: number;
 };
 
+/**
+ * One entry of the Insights log.
+ *
+ * The copy is **not** here: it lives in `lib/i18n/{en,th}.ts` under
+ * `insights.log.logN.*`, keyed by `id`, so the panel is translatable and the two
+ * languages cannot drift. This type therefore carries only what the layout needs.
+ */
 export type AiLogEntry = {
   id: string;
   tag: 'Seasonal' | 'Markov' | 'Monte Carlo' | 'LSTM' | 'ARIMA';
-  headline: string;
-  detail: string;
   confidence: Confidence;
-};
-
-export type ScorecardEntry = {
-  id: string;
-  date: string;
-  predicted: string[];
-  actual: string;
-  hits: number;
 };
 
 export type NumberAnalysis = {
@@ -255,58 +252,10 @@ export const TREND_SERIES: TrendPoint[] = [
 // ---------------------------------------------------------------------------
 
 export const AI_LOG: AiLogEntry[] = [
-  {
-    id: 'log-1',
-    tag: 'Seasonal',
-    headline: 'Q4 drift detected on the "4x" band',
-    detail:
-      'Numbers ending in 4 outperform their 12-draw baseline by 24% in the final quarter. The effect is strongest in the Top position and has held for three consecutive cycles.',
-    confidence: 'High',
-  },
-  {
-    id: 'log-2',
-    tag: 'Markov',
-    headline: 'Transition 93 → 48 has elevated weight',
-    detail:
-      'The transition matrix gives 48 a 0.31 conditional probability after 93 is drawn, roughly 1.9x its unconditional rate.',
-    confidence: 'Medium',
-  },
-  {
-    id: 'log-3',
-    tag: 'Monte Carlo',
-    headline: '10,000 simulations cluster on low-mid pairs',
-    detail:
-      'Across 10k simulated draws the low-mid band (10-59) appeared in 58% of Top-position outcomes, versus 50% expected uniformly.',
-    confidence: 'Medium',
-  },
-  {
-    id: 'log-4',
-    tag: 'ARIMA',
-    headline: 'Volatility compression before the draw',
-    detail:
-      '(1,1,1) residuals show narrowing variance in the last 5 draws, historically a precursor to a higher-conviction prediction.',
-    confidence: 'Low',
-  },
-];
-
-// ---------------------------------------------------------------------------
-// Performance scorecard
-// ---------------------------------------------------------------------------
-
-export const PERFORMANCE_SUMMARY = {
-  hitRate: 0.68,
-  totalPredictions: 214,
-  top5Rate: 0.41,
-  longestStreak: 9,
-} as const;
-
-export const SCORECARD: ScorecardEntry[] = [
-  { id: 'sc-1', date: '2026-10-10', predicted: ['48', '17', '93'], actual: '48', hits: 1 },
-  { id: 'sc-2', date: '2026-10-07', predicted: ['26', '81', '05'], actual: '72', hits: 0 },
-  { id: 'sc-3', date: '2026-10-04', predicted: ['72', '64', '39'], actual: '64', hits: 1 },
-  { id: 'sc-4', date: '2026-10-01', predicted: ['93', '20', '48'], actual: '93', hits: 1 },
-  { id: 'sc-5', date: '2026-09-28', predicted: ['05', '17', '26'], actual: '17', hits: 1 },
-  { id: 'sc-6', date: '2026-09-25', predicted: ['81', '48', '64'], actual: '02', hits: 0 },
+  { id: 'log-1', tag: 'Seasonal', confidence: 'High' },
+  { id: 'log-2', tag: 'Markov', confidence: 'Medium' },
+  { id: 'log-3', tag: 'Monte Carlo', confidence: 'Medium' },
+  { id: 'log-4', tag: 'ARIMA', confidence: 'Low' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -341,8 +290,10 @@ export function analyzeNumber(input: string): NumberAnalysis {
     appearances,
     lastWon: wonRecently
       ? {
-          date: '2026-08-19',
-          prize: '2nd Prize',
+          // Real GLO draw dates are the 1st and the 16th, so the mock must not invent
+          // a 19th. 16 Aug 2026 is a draw that is actually in the ledger.
+          date: '2026-08-16',
+          prize: 'เลขท้าย 2 ตัว',
           position: 'Top position',
         }
       : null,
@@ -379,17 +330,3 @@ export function analyzeNumber(input: string): NumberAnalysis {
   };
 }
 
-/** Prize tiers used by the Performance prize checker. */
-export const PRIZE_TIERS = [
-  { match: '3 digits', label: '1st Prize', amount: '฿ 6,000,000' },
-  { match: '2 digits', label: '2nd Prize', amount: '฿ 200,000' },
-  { match: '1 digit', label: '3rd Prize', amount: '฿ 4,000' },
-] as const;
-
-/** Latest winning result set used by the prize checker. */
-export const LATEST_RESULT = {
-  date: '2026-10-10',
-  first: '482931',
-  second: '17640',
-  third: '05',
-} as const;

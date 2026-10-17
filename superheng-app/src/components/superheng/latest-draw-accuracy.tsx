@@ -19,6 +19,7 @@ import {
   type ChannelKey,
   type LotteryType,
 } from '@/lib/api';
+import { apiErrorText, type ApiErrorText } from '@/lib/api-error';
 import { useAuth } from '@/lib/auth';
 import { formatCount, formatLocalizedDate } from '@/lib/format';
 import { useTranslation, type Language } from '@/lib/i18n';
@@ -60,7 +61,9 @@ export function LatestDrawAccuracy({ lotteryType }: { lotteryType: LotteryType }
   const { t, language } = useTranslation();
   const { accessToken } = useAuth();
   const [report, setReport] = useState<AccuracyReport | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // A key plus params rather than a sentence, so the message follows the language
+  // toggle and never leaks the English text of `ApiError.message` into a Thai card.
+  const [error, setError] = useState<ApiErrorText | null>(null);
   const [errorStatus, setErrorStatus] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
@@ -79,7 +82,7 @@ export function LatestDrawAccuracy({ lotteryType }: { lotteryType: LotteryType }
         // normally fire — which is why it is worth keeping as a check.
         if (result.lottery_type !== lotteryType) {
           setReport(null);
-          setError(t('premium.lotteryMismatch'));
+          setError({ key: 'premium.lotteryMismatch', params: { status: '—' } });
           setLoading(false);
           return;
         }
@@ -91,9 +94,7 @@ export function LatestDrawAccuracy({ lotteryType }: { lotteryType: LotteryType }
       (caught: unknown) => {
         if (cancelled) return;
         setReport(null);
-        setError(
-          isApiError(caught) ? caught.message : t('premium.accuracy.loadFailed')
-        );
+        setError(apiErrorText(caught));
         setErrorStatus(isApiError(caught) ? caught.status : undefined);
         setLoading(false);
       }
@@ -126,7 +127,7 @@ export function LatestDrawAccuracy({ lotteryType }: { lotteryType: LotteryType }
           </ThemedText>
         </View>
         <ThemedText type="small" themeColor="textSecondary" style={styles.errBody}>
-          {error ?? t('premium.unknownError')}
+          {error ? t(error.key, error.params) : t('premium.unknownError')}
         </ThemedText>
         {refused ? (
           <ThemedText type="small" themeColor="textMuted" style={styles.errHint}>

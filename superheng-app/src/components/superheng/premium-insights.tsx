@@ -23,6 +23,7 @@ import {
   type PremiumInsights,
   type PredictionStatus,
 } from '@/lib/api';
+import { apiErrorText, type ApiErrorText } from '@/lib/api-error';
 import { useAuth } from '@/lib/auth';
 import { formatCount, formatLocalizedDate, formatPercent } from '@/lib/format';
 import { useTranslation } from '@/lib/i18n';
@@ -79,7 +80,9 @@ export function PremiumInsightsPanel() {
   const { t, language } = useTranslation();
   const { accessToken } = useAuth();
   const [insights, setInsights] = useState<PremiumInsights | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // A key plus its params, not a sentence: the message has to survive a language
+  // toggle, and an `ApiError.message` is English written for a developer.
+  const [error, setError] = useState<ApiErrorText | null>(null);
   /**
    * The HTTP status behind `error`, when there was one. Kept because the *reason*
    * the panel is refusing to load decides what the reader should do next: a 401
@@ -140,7 +143,7 @@ export function PremiumInsightsPanel() {
         // worth keeping as a check instead of a comment.
         if (result.lottery_type !== lotteryType) {
           setInsights(null);
-          setError(t('premium.lotteryMismatch'));
+          setError({ key: 'premium.lotteryMismatch', params: { status: '—' } });
           setLoading(false);
           return;
         }
@@ -152,11 +155,7 @@ export function PremiumInsightsPanel() {
       (caught: unknown) => {
         if (cancelled) return;
         setInsights(null);
-        setError(
-          isApiError(caught)
-            ? caught.message
-            : 'Something went wrong while loading premium insights.'
-        );
+        setError(apiErrorText(caught));
         setErrorStatus(isApiError(caught) ? caught.status : undefined);
         setLoading(false);
       }
@@ -288,7 +287,7 @@ export function PremiumInsightsPanel() {
               {t('premium.loadFailed')}
             </ThemedText>
           </View>            <ThemedText type="small" themeColor="textSecondary" style={styles.errBody}>
-            {error ?? t('premium.unknownError')}
+            {error ? t(error.key, error.params) : t('premium.unknownError')}
           </ThemedText>
           {/*
             Retry is withheld for an entitlement refusal. `PremiumGate` above the
