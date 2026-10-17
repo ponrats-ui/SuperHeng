@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { Platform } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import { ActiveUsersProvider } from '@/hooks/use-active-users';
 import { useAppTheme } from '@/hooks/use-app-theme';
 import { AuthProvider } from '@/lib/auth';
 import { LanguageProvider } from '@/lib/i18n';
@@ -57,30 +58,39 @@ export default function RootLayout() {
     // language — a per-screen provider would let them disagree.
     <LanguageProvider>
       {/*
-        Auth sits above the navigator too, and for a stronger reason than the
-        language: it holds the one Supabase session and the one token-refresh
-        subscription for the whole app. Two providers would mean two clients racing
-        over one stored session, and a screen mounted outside the provider would
-        throw on `useAuth()` — which is why this wraps every route rather than just
-        the premium ones.
+        Presence sits above the navigator so the app joins its Realtime channel
+        exactly once. The count is rendered by the header, and the header exists on
+        every tab; a per-screen connection would count one visitor several times.
+        It needs nothing from auth — a visitor is tracked anonymously — so it is a
+        sibling of `AuthProvider`, not a child of it.
       */}
-      <AuthProvider>
-        <ThemeProvider value={navigationTheme}>
-          {/* Light content on the dark background, pinned rather than derived. */}
-          <StatusBar style="light" />
-          <AnimatedSplashOverlay />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: colors.background },
-            }}>
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="about" options={MODAL_SCREEN_OPTIONS} />
-            <Stack.Screen name="donate" options={MODAL_SCREEN_OPTIONS} />
-            <Stack.Screen name="premium" options={MODAL_SCREEN_OPTIONS} />
-          </Stack>
-        </ThemeProvider>
-      </AuthProvider>
+      <ActiveUsersProvider>
+        {/*
+          Auth sits above the navigator too, and for a stronger reason than the
+          language: it holds the one Supabase session and the one token-refresh
+          subscription for the whole app. Two providers would mean two clients racing
+          over one stored session, and a screen mounted outside the provider would
+          throw on `useAuth()` — which is why this wraps every route rather than just
+          the premium ones.
+        */}
+        <AuthProvider>
+          <ThemeProvider value={navigationTheme}>
+            {/* Light content on the dark background, pinned rather than derived. */}
+            <StatusBar style="light" />
+            <AnimatedSplashOverlay />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: colors.background },
+              }}>
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="about" options={MODAL_SCREEN_OPTIONS} />
+              <Stack.Screen name="donate" options={MODAL_SCREEN_OPTIONS} />
+              <Stack.Screen name="premium" options={MODAL_SCREEN_OPTIONS} />
+            </Stack>
+          </ThemeProvider>
+        </AuthProvider>
+      </ActiveUsersProvider>
     </LanguageProvider>
   );
 }

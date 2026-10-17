@@ -42,6 +42,9 @@ The app is organised into four bottom-tab screens:
 - 🌘 **Dark by design** — the deep-navy palette is the product, not a preference: the app
   pins `userInterfaceStyle` and ignores the system's light setting. A light palette still
   exists in `src/constants/theme.ts` if it is ever needed again.
+- 🟢 **Live activity** — a pulsing dot in the header shows how many people have the app
+  open right now, over a public Supabase Realtime Presence channel. No account needed:
+  each session is tracked under a throwaway key and expires when the tab closes.
 - 📱 **Responsive** — single column on phones, multi-column heatmap + charts on tablets.
 - 🔍 **Explainable** — every prediction is accompanied by the reasoning that produced it.
 

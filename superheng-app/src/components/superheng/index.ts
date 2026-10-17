@@ -1,3 +1,4 @@
+export * from './active-users-badge';
 export * from './app-header';
 export * from './backtest-dashboard';
 export * from './backtest-hook';

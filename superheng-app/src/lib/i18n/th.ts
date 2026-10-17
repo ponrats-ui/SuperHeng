@@ -152,6 +152,10 @@ export const th: Record<TranslationKey, string> = {
   'status.limited': 'จำกัด',
   'status.insufficientData': 'ไม่มีข้อมูล',
 
+  // Presence — จำนวนผู้ใช้งานสด
+  'presence.active': 'กำลังใช้งาน {count} คน',
+  'presence.active_one': 'กำลังใช้งาน 1 คน',
+
   // Premium
   'premium.title': 'ข้อมูลเชิงลึก Premium',
   // ชื่อประเทศ ไม่ใช้ตัวย่อ: "TH/LA/VN" จะไปซ้ำกับปุ่มสลับภาษา TH/EN ที่หัวแอป

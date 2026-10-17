@@ -1,5 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 
+import { ActiveUsersBadge } from '@/components/superheng/active-users-badge';
 import { LanguageToggle } from '@/components/superheng/language-toggle';
 import { ThemedText } from '@/components/themed-text';
 import { Brand, Radius, Spacing } from '@/constants/theme';
@@ -18,39 +19,51 @@ export type AppHeaderProps = {
  * and four copies of it would drift — one screen would eventually be added without
  * it. The wordmark and monogram are deliberately not translated; "SuperHeng" is the
  * product name and reads the same in both languages.
+ *
+ * The **live active-user badge** lives here too, on its own line beneath the
+ * wordmark. One header means one place to add a header-level element, and the right
+ * side already carries three controls — see `ActiveUsersBadge` for why it does not
+ * join them.
  */
 export function AppHeader({ subtitle, right }: AppHeaderProps) {
   const { colors } = useAppTheme();
 
   return (
     <View style={styles.container}>
-      <View style={styles.identity}>
-        <View style={styles.monogram}>
-          <ThemedText style={styles.monogramText}>H</ThemedText>
-        </View>
-        <View style={styles.identityText}>
-          <View style={styles.wordmarkRow}>
-            <ThemedText style={styles.wordmark}>Super</ThemedText>
-            <ThemedText style={[styles.wordmark, { color: colors.gold }]}>Heng</ThemedText>
+      <View style={styles.row}>
+        <View style={styles.identity}>
+          <View style={styles.monogram}>
+            <ThemedText style={styles.monogramText}>H</ThemedText>
           </View>
-          {subtitle ? (
-            <ThemedText type="small" themeColor="textMuted" style={styles.subtitle}>
-              {subtitle}
-            </ThemedText>
-          ) : null}
+          <View style={styles.identityText}>
+            <View style={styles.wordmarkRow}>
+              <ThemedText style={styles.wordmark}>Super</ThemedText>
+              <ThemedText style={[styles.wordmark, { color: colors.gold }]}>Heng</ThemedText>
+            </View>
+            {subtitle ? (
+              <ThemedText type="small" themeColor="textMuted" style={styles.subtitle}>
+                {subtitle}
+              </ThemedText>
+            ) : null}
+          </View>
+        </View>
+
+        <View style={styles.trailing}>
+          {right}
+          <LanguageToggle />
         </View>
       </View>
 
-      <View style={styles.trailing}>
-        {right}
-        <LanguageToggle />
-      </View>
+      <ActiveUsersBadge />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    gap: Spacing.two,
+  },
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

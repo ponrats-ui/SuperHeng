@@ -154,6 +154,14 @@ export const en = {
   'status.insufficientData': 'NO DATA',
 
   // ---------------------------------------------------------------------------
+  // Presence — the live active-user count
+  // ---------------------------------------------------------------------------
+  // `_one` is the singular; the i18n layer picks it automatically only when `count`
+  // is the number 1, and the badge formats thousands, so it asks for the key itself.
+  'presence.active': '{count} Active Users',
+  'presence.active_one': '1 Active User',
+
+  // ---------------------------------------------------------------------------
   // Premium
   // ---------------------------------------------------------------------------
   'premium.title': 'Premium insights',
