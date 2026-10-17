@@ -721,6 +721,18 @@ export const en = {
   'performance.historySubtitle': 'Walk-forward replay · {from} → {to}',
   'performance.historySubtitleFallback': 'Model pick vs. actual result',
   'performance.latestDraw': 'Latest draw',
+  // Where the *next* draw's top pick came from, using the evidence the model actually
+  // emitted. It is deliberately attached to the upcoming draw and never to a past one:
+  // the service keeps no evidence for a replay, so a badge on a historical pick would
+  // be invented provenance.
+  'performance.evidenceTitle': 'Next draw · where the picks come from',
+  'performance.evidenceSubtitle':
+    "The strongest signal behind each channel's top pick, from the same payload as " +
+    'the prediction.',
+  'performance.evidenceFrequency':
+    'Frequency {lift}× baseline · seen {count} of {expected} expected',
+  'performance.evidenceMarkov': 'Markov {lift}× baseline',
+  'performance.evidenceUniform': 'No edge over the uniform rate',
   'performance.aiPredicted': 'AI predicted',
   'performance.actualResult': 'Actual result',
   'performance.hit': 'HIT',

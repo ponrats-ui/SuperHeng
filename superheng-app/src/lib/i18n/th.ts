@@ -596,6 +596,13 @@ export const th: Record<TranslationKey, string> = {
   'performance.historySubtitle': 'ทายย้อนหลัง · {from} → {to}',
   'performance.historySubtitleFallback': 'คำทำนายของ AI เทียบผลออกรางวัล',
   'performance.latestDraw': 'งวดล่าสุด',
+  // “ที่มาของเลข” แนบกับ “งวดถัดไป” เท่านั้น: ระบบไม่ได้เก็บหลักฐานของคำทำนายย้อนหลัง
+  // การติดป้ายให้คำทำนายที่ replay ขึ้นมาใหม่จึงเป็นการกุที่มา
+  'performance.evidenceTitle': 'งวดถัดไป · ที่มาของเลข',
+  'performance.evidenceSubtitle': 'สัญญาณที่แรงที่สุดของเลขอันดับ 1 ในแต่ละช่อง จากข้อมูลชุดเดียวกับคำทำนาย',
+  'performance.evidenceFrequency': 'ความถี่ {lift}× ค่าฐาน · ออก {count} จากที่คาด {expected}',
+  'performance.evidenceMarkov': 'Markov {lift}× ค่าฐาน',
+  'performance.evidenceUniform': 'ไม่ต่างจากอัตราฐาน',
   'performance.aiPredicted': 'AI ทำนาย',
   'performance.actualResult': 'ผลออกรางวัล',
   'performance.hit': 'ถูกรางวัล',

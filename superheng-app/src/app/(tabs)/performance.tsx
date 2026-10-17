@@ -8,6 +8,7 @@ import { useAppTheme } from '@/hooks/use-app-theme';
 import {
   getBacktest,
   getBasicPredictions,
+  type ApiRanking,
   type Backtest,
   type BacktestChannel,
   type BacktestChannelReport,
@@ -78,6 +79,21 @@ type CheckOutcome = { tier: 'first'; prize: string } | { tier: 'lastTwo'; digits
 /** The latest published result, as `/api/predict/basic` reports it. */
 type LatestDraw = { date: string; firstPrize: string; bottomTwo: string };
 
+/**
+ * The model's top pick for the *upcoming* draw, with the signal that carried it.
+ *
+ * This is the only place a "where did this number come from" badge is honest: the
+ * payload ships the evidence for the live ranking, and nothing ships evidence for a
+ * replayed historical pick. Attaching a provenance tag to a past draw would be
+ * inventing the provenance — the number and the reason would both be reconstructions.
+ */
+type PickEvidence = {
+  channel: BacktestChannel;
+  code: string;
+  labelKey: TranslationKey;
+  params: Record<string, string | number>;
+};
+
 type HistoryState =
   | { status: 'loading' }
   | { status: 'ready'; report: Backtest }
@@ -85,7 +101,7 @@ type HistoryState =
 
 type LatestState =
   | { status: 'loading' }
-  | { status: 'ready'; draw: LatestDraw }
+  | { status: 'ready'; draw: LatestDraw; picks: PickEvidence[] }
   | { status: 'empty' }
   | { status: 'failed' };
 
@@ -103,6 +119,44 @@ const CHANNEL_LABEL_KEYS: Record<BacktestChannel, TranslationKey> = {
   bottom: 'performance.channelBottom',
   top: 'performance.channelTop',
 };
+
+/**
+ * The single strongest real signal behind a pick.
+ *
+ * Both evidence records are emitted by the backend for the code it ranked, so the tag
+ * quotes the model's own numbers instead of a summary written by hand: `lift` is
+ * `count / expected` for frequency and a smoothed conditional/unconditional ratio for
+ * Markov. When neither beats the uniform rate the tag says exactly that — a confident
+ * badge on a pick with no edge is the same lie in smaller type.
+ */
+function strongestEvidence(channel: BacktestChannel, ranking: ApiRanking): PickEvidence {
+  const frequency = ranking.evidence?.frequency;
+  const markov = ranking.evidence?.markov;
+  const frequencyLift = frequency?.lift ?? 0;
+  const markovLift = markov?.lift ?? 0;
+
+  if (markov && markovLift > Math.max(1, frequencyLift)) {
+    return {
+      channel,
+      code: ranking.code,
+      labelKey: 'performance.evidenceMarkov',
+      params: { lift: markovLift.toFixed(2) },
+    };
+  }
+  if (frequency && frequencyLift > 1) {
+    return {
+      channel,
+      code: ranking.code,
+      labelKey: 'performance.evidenceFrequency',
+      params: {
+        lift: frequencyLift.toFixed(2),
+        count: frequency.count,
+        expected: Math.round(frequency.expected),
+      },
+    };
+  }
+  return { channel, code: ranking.code, labelKey: 'performance.evidenceUniform', params: {} };
+}
 
 /**
  * Checks a ticket against the *published* result.
@@ -124,15 +178,21 @@ function checkTicket(input: string, draw: LatestDraw | null): CheckOutcome {
   return null;
 }
 
-/** The HIT / TOP-5 / MISS verdict for one replayed draw, as colours and a key. */
-function verdictOf(point: BacktestTimelinePoint, colors: {
-  success: string;
-  gold: string;
-  danger: string;
-}): { labelKey: TranslationKey; color: string } {
+/**
+ * The HIT / TOP-5 / MISS verdict for one replayed draw, as colours and a key.
+ *
+ * A miss is neutral grey, not red. Red on every row of an honest record reads as an
+ * alarm and pushes the reader towards the interpretation the numbers do not support;
+ * grey states the same fact without editorialising. Green is reserved for an exact
+ * hit and gold for "inside the five picks", because those two are not the same claim.
+ */
+function verdictOf(
+  point: BacktestTimelinePoint,
+  colors: { success: string; gold: string; neutral: string }
+): { labelKey: TranslationKey; color: string } {
   if (point.exact_hit) return { labelKey: 'performance.hit', color: colors.success };
   if (point.top_5_hit) return { labelKey: 'performance.inTop5', color: colors.gold };
-  return { labelKey: 'performance.miss', color: colors.danger };
+  return { labelKey: 'performance.miss', color: colors.neutral };
 }
 
 export default function PerformanceScreen() {
@@ -166,6 +226,13 @@ export default function PerformanceScreen() {
       (payload) => {
         if (cancelled) return;
         const draw = payload.latest_draw;
+        // The ranking rides along in the same response, so the provenance tags cost no
+        // extra request — and they are the live ranking's evidence, never the replay's.
+        const picks = HISTORY_CHANNELS.map((channel) => {
+          const ranking = payload.channels[channel]?.rankings?.[0];
+          return ranking ? strongestEvidence(channel, ranking) : null;
+        }).filter((pick): pick is PickEvidence => pick !== null);
+
         setLatest(
           draw
             ? {
@@ -175,6 +242,7 @@ export default function PerformanceScreen() {
                   firstPrize: draw.first_prize,
                   bottomTwo: draw.bottom_two,
                 },
+                picks,
               }
             : { status: 'empty' }
         );
@@ -440,6 +508,10 @@ export default function PerformanceScreen() {
           />
         ) : null}
 
+        {latest.status === 'ready' && latest.picks.length > 0 ? (
+          <EvidenceStrip picks={latest.picks} t={t} />
+        ) : null}
+
         {report && channel && rows.length === 0 ? (
           <ThemedText type="small" themeColor="textMuted" style={styles.note}>
             {t('performance.notEnoughHistory')}
@@ -475,7 +547,14 @@ function LatestDrawComparison({
   point: BacktestTimelinePoint;
   language: Language;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
-  colors: { success: string; gold: string; danger: string; backgroundElement: string; cardBorder: string; text: string };
+  colors: {
+    success: string;
+    gold: string;
+    neutral: string;
+    backgroundElement: string;
+    cardBorder: string;
+    text: string;
+  };
 }) {
   const verdict = verdictOf(point, colors);
 
@@ -540,6 +619,54 @@ function LatestDrawComparison({
           </View>
         </View>
       </View>
+    </View>
+  );
+}
+
+/**
+ * Why the model's *upcoming* picks are where they are.
+ *
+ * This is the provenance badge the design calls for, built from the evidence the API
+ * actually emitted for each ranking — not a retrospective label on a finished draw,
+ * where the number was rebuilt and the reason was never recorded.
+ */
+function EvidenceStrip({
+  picks,
+  t,
+}: {
+  picks: PickEvidence[];
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string;
+}) {
+  const { colors } = useAppTheme();
+
+  return (
+    <View style={[styles.evidence, { borderColor: `${colors.gold}40`, backgroundColor: `${colors.gold}0A` }]}>
+      <ThemedText type="smallBold" style={[styles.evidenceTitle, { color: colors.accent }]}>
+        {t('performance.evidenceTitle')}
+      </ThemedText>
+      <ThemedText type="small" themeColor="textMuted" style={styles.evidenceSubtitle}>
+        {t('performance.evidenceSubtitle')}
+      </ThemedText>
+
+      {picks.map((pick) => (
+        <View key={pick.channel} style={styles.evidenceRow}>
+          <ThemedText type="small" themeColor="textMuted" style={styles.evidenceChannel}>
+            {t(CHANNEL_LABEL_KEYS[pick.channel])}
+          </ThemedText>
+          <View
+            style={[
+              styles.evidenceCode,
+              { borderColor: `${colors.gold}66`, backgroundColor: `${colors.gold}1A` },
+            ]}>
+            <ThemedText type="smallBold" style={[styles.evidenceCodeText, { color: colors.accent }]}>
+              {pick.code}
+            </ThemedText>
+          </View>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.evidenceTag}>
+            {t(pick.labelKey, pick.params)}
+          </ThemedText>
+        </View>
+      ))}
     </View>
   );
 }
@@ -734,6 +861,49 @@ const styles = StyleSheet.create({
   },
   tierAmount: {
     fontVariant: ['tabular-nums'],
+  },
+  evidence: {
+    marginTop: Spacing.two,
+    padding: Spacing.three,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: Spacing.one,
+  },
+  evidenceTitle: {
+    fontSize: 11,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  evidenceSubtitle: {
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  evidenceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginTop: Spacing.one,
+  },
+  evidenceChannel: {
+    fontSize: 10,
+    flexShrink: 0,
+  },
+  evidenceCode: {
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 1,
+    borderRadius: Radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  evidenceCodeText: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1,
+    fontVariant: ['tabular-nums'],
+  },
+  evidenceTag: {
+    flex: 1,
+    fontSize: 10,
+    lineHeight: 15,
   },
   latestCard: {
     marginTop: Spacing.three,
