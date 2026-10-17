@@ -3,17 +3,17 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, probabilityColor } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
-import type { HeatCell } from '@/data/mock';
+import { HEATMAP_HIGH_SCORE, type HeatmapCell } from '@/lib/heatmap';
 
 export type HeatmapProps = {
-  cells: HeatCell[];
+  cells: HeatmapCell[];
   /** Called when a cell is tapped (used to jump into "My Number"). */
   onSelect?: (code: string) => void;
 };
 
-/** Converts a 0-100 probability into a 2-char hex alpha channel. */
-function alphaFor(probability: number): string {
-  const alpha = Math.round((0.14 + (Math.min(100, probability) / 100) * 0.8) * 255);
+/** Converts a 0-100 score into a 2-char hex alpha channel. */
+function alphaFor(score: number): string {
+  const alpha = Math.round((0.14 + (Math.min(100, score) / 100) * 0.8) * 255);
   return alpha.toString(16).padStart(2, '0').toUpperCase();
 }
 
@@ -28,13 +28,13 @@ export function Heatmap({ cells, onSelect }: HeatmapProps) {
       {rows.map((row, rowIndex) => (
         <View key={rowIndex} style={styles.row}>
           {row.map((cell) => {
-            const base = probabilityColor(cell.probability);
-            const alpha = alphaFor(cell.probability);
-            const strong = cell.probability >= 60;
+            const base = probabilityColor(cell.score);
+            const alpha = alphaFor(cell.score);
+            const strong = cell.score >= HEATMAP_HIGH_SCORE;
             return (
               <Pressable
                 key={cell.code}
-                accessibilityLabel={`Number ${cell.code}, probability ${cell.probability} percent`}
+                accessibilityLabel={`Number ${cell.code}, signal score ${Math.round(cell.score)} of 100`}
                 onPress={() => onSelect?.(cell.code)}
                 style={({ pressed }) => [
                   styles.cell,

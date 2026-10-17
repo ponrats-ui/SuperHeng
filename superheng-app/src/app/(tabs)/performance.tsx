@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { AppHeader, Card, PageScaffold, SectionHeader, StatTile } from '@/components/superheng';
@@ -8,16 +8,22 @@ import { useAppTheme } from '@/hooks/use-app-theme';
 import {
   getBacktest,
   getBasicPredictions,
+  getLatestDraws,
   type ApiRanking,
   type Backtest,
   type BacktestChannel,
   type BacktestChannelReport,
   type BacktestTimelinePoint,
-  type LotteryType,
+  type LatestDrawRow,
 } from '@/lib/api';
 import { apiErrorText, type ApiErrorText } from '@/lib/api-error';
 import { formatP, percent } from '@/lib/backtest-format';
 import { formatLocalizedDate } from '@/lib/format';
+import {
+  replayHeatmapSignals,
+  type HeatmapReplayRow,
+  type HeatmapSignalSource,
+} from '@/lib/heatmap';
 import { useTranslation, type Language, type TranslationKey } from '@/lib/i18n';
 
 /**
@@ -43,24 +49,33 @@ const HISTORY_DRAWS = 6;
 const HISTORY_CHANNELS: readonly BacktestChannel[] = ['bottom', 'top'];
 
 /**
- * How much history the highlights card searches, and in which ledgers.
+ * How far back the highlight card searches for the newest genuine catch.
  *
- * The card answers "is there a *verified* win to lead with?" and the answer has to
- * outlive the six-draw window above it: a real top-five catch from three weeks ago is
- * still a real catch. Thirty draws is the window the Backtest tab publishes rates over,
- * so the card and the tab cannot quote different records for the same ledger. It is
- * also the window in which the server's p-value is computed, which is why the card can
- * put the p-value beside the win instead of leaving it implied.
+ * Wider than the six rows below it, because a real catch from three months ago is still
+ * a real catch and the card is about the most recent *verified* one. It is deliberately
+ * the Thai ledger only: borrowing another country's win for a Thai headline is the same
+ * substitution this screen already refuses to make with the numbers themselves.
  */
-const HIGHLIGHT_DRAWS = 30;
+const HIGHLIGHT_DRAWS = 12;
 
-/** The ledgers the highlights card looks through, in display order. */
-const HIGHLIGHT_TYPES: readonly LotteryType[] = ['thai', 'laos', 'vietnam'];
+/** Which copy names each signal, in the row tags and the highlight card. */
+const SOURCE_LABEL_KEYS: Record<HeatmapSignalSource, TranslationKey> = {
+  top1: 'performance.sourceTop1',
+  top5: 'performance.sourceTop5',
+  heatmap: 'performance.sourceHeatmap',
+  markov: 'performance.sourceMarkov',
+  frequency: 'performance.sourceFrequency',
+  momentum: 'performance.sourceMomentum',
+};
 
-const COUNTRY_LABEL_KEYS: Record<LotteryType, TranslationKey> = {
-  thai: 'premium.lotteryThai',
-  laos: 'premium.lotteryLaos',
-  vietnam: 'premium.lotteryVietnam',
+/** Which sentence describes each signal's catch. */
+const SOURCE_BODY_KEYS: Record<HeatmapSignalSource, TranslationKey> = {
+  top1: 'performance.highlightsExactBody',
+  top5: 'performance.highlightsTop5Body',
+  heatmap: 'performance.highlightsHeatmapBody',
+  markov: 'performance.highlightsMarkovBody',
+  frequency: 'performance.highlightsFrequencyBody',
+  momentum: 'performance.highlightsMomentumBody',
 };
 
 /**
@@ -128,35 +143,15 @@ type LatestState =
   | { status: 'failed' };
 
 /**
- * One draw the service can prove a signal caught.
+ * The published Thai draws, which the heatmap replay reads.
  *
- * `kind` is the strength of the claim, not decoration: `exact` means the number the
- * model ranked first was the number drawn, `top5` means it sat somewhere in the five
- * codes the model shortlisted. The two are rendered differently because they are
- * different achievements — a top-five catch against a 5% baseline is a real result,
- * but it is not a hit on the ranking's first line.
- *
- * The rate fields come from the same payload as the winning draw, never from a
- * favourite window picked after the fact: `hits / picks` and the p-value are the
- * server's own summary of the ledger this draw belongs to.
+ * A separate request from the backtest because it is a separate fact: the replay needs
+ * the numbers that were drawn, not the server's scored summary of them. Either can fail
+ * without the other taking the card down with it.
  */
-type Highlight = {
-  lotteryType: LotteryType;
-  channel: BacktestChannel;
-  drawDate: string;
-  actual: string;
-  kind: 'exact' | 'top5';
-  picks: number;
-  hits: number;
-  percent: number | null;
-  baseline: number | null;
-  pValue: number | null;
-  significant: boolean;
-};
-
-type HighlightState =
+type DrawsState =
   | { status: 'loading' }
-  | { status: 'ready'; highlight: Highlight | null }
+  | { status: 'ready'; rows: LatestDrawRow[] }
   | { status: 'failed' };
 
 /** The channel this card will show, preferring the bottom two. */
@@ -173,66 +168,6 @@ const CHANNEL_LABEL_KEYS: Record<BacktestChannel, TranslationKey> = {
   bottom: 'performance.channelBottom',
   top: 'performance.channelTop',
 };
-
-/**
- * The newest draw in one ledger that any scored signal actually caught, if any.
- *
- * Only signals the server scores per draw are considered. The frequency and Markov
- * evidence in `/api/predict/basic` describes the *upcoming* draw and is not stored, so
- * it cannot be checked against a result that already happened; claiming a past draw was
- * "a Heatmap hit" would mean recomputing the heatmap after seeing the number and then
- * calling that a prediction. Top-five membership and the #1 pick are the two claims the
- * replay genuinely holds.
- */
-function buildHighlight(lotteryType: LotteryType, report: Backtest): Highlight | null {
-  let best: Highlight | null = null;
-
-  for (const channel of HISTORY_CHANNELS) {
-    const block = report.channels[channel];
-    const timeline = block?.timeline;
-    if (!block?.available || !timeline?.length) continue;
-
-    // The timeline is oldest-first, so the first hit walking backwards is the latest.
-    const point = [...timeline].reverse().find((row) => row.exact_hit || row.top_5_hit);
-    if (!point) continue;
-
-    const candidate: Highlight = {
-      lotteryType,
-      channel,
-      drawDate: point.draw_date,
-      actual: point.actual,
-      kind: point.exact_hit ? 'exact' : 'top5',
-      picks: timeline.length,
-      hits: block.ai?.top_5_hits ?? 0,
-      percent: block.ai?.top_5_hit_rate_percent ?? null,
-      baseline: block.uniform?.top_5_hit_rate_percent ?? null,
-      pValue: block.skill?.top_5_p_value ?? null,
-      significant: block.skill?.top_5_significant === true,
-    };
-
-    if (
-      !best ||
-      candidate.drawDate > best.drawDate ||
-      (candidate.drawDate === best.drawDate &&
-        candidate.kind === 'exact' &&
-        best.kind !== 'exact')
-    ) {
-      best = candidate;
-    }
-  }
-
-  return best;
-}
-
-/** The most recent verified win across the ledgers, preferring a stronger claim. */
-function newestHighlight(highlights: Highlight[]): Highlight | null {
-  const ranked = [...highlights].sort((a, b) => {
-    if (a.drawDate !== b.drawDate) return a.drawDate < b.drawDate ? 1 : -1;
-    if (a.kind !== b.kind) return a.kind === 'exact' ? -1 : 1;
-    return 0;
-  });
-  return ranked[0] ?? null;
-}
 
 /**
  * The single strongest real signal behind a pick.
@@ -292,23 +227,6 @@ function checkTicket(input: string, draw: LatestDraw | null): CheckOutcome {
   return null;
 }
 
-/**
- * The HIT / TOP-5 / MISS verdict for one replayed draw, as colours and a key.
- *
- * A miss is neutral grey, not red. Red on every row of an honest record reads as an
- * alarm and pushes the reader towards the interpretation the numbers do not support;
- * grey states the same fact without editorialising. Green is reserved for an exact
- * hit and gold for "inside the five picks", because those two are not the same claim.
- */
-function verdictOf(
-  point: BacktestTimelinePoint,
-  colors: { success: string; gold: string; neutral: string }
-): { labelKey: TranslationKey; color: string } {
-  if (point.exact_hit) return { labelKey: 'performance.hit', color: colors.success };
-  if (point.top_5_hit) return { labelKey: 'performance.inTop5', color: colors.gold };
-  return { labelKey: 'performance.miss', color: colors.neutral };
-}
-
 export default function PerformanceScreen() {
   const { colors } = useAppTheme();
   const { t, language } = useTranslation();
@@ -317,7 +235,7 @@ export default function PerformanceScreen() {
   const [checked, setChecked] = useState(false);
   const [history, setHistory] = useState<HistoryState>({ status: 'loading' });
   const [latest, setLatest] = useState<LatestState>({ status: 'loading' });
-  const [highlights, setHighlights] = useState<HighlightState>({ status: 'loading' });
+  const [draws, setDraws] = useState<DrawsState>({ status: 'loading' });
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -337,29 +255,19 @@ export default function PerformanceScreen() {
       }
     );
 
-    // The highlights scan the three ledgers for a win the replay can prove. It is its own
-    // request pair because it needs a wider window than the six-draw list, and it is
-    // allowed to fail on its own: a slow ledger must not take the history card down.
-    void Promise.allSettled(
-      HIGHLIGHT_TYPES.map((type) => getBacktest(type, HIGHLIGHT_DRAWS))
-    ).then((results) => {
-      if (cancelled) return;
-      const found: Highlight[] = [];
-      let answered = 0;
-      results.forEach((result, index) => {
-        if (result.status !== 'fulfilled') return;
-        answered += 1;
-        const highlight = buildHighlight(HIGHLIGHT_TYPES[index], result.value);
-        if (highlight) found.push(highlight);
-      });
-      // No ledger answered at all is a failure, not an empty record — the card must not
-      // say "no wins" when it is the network that is missing.
-      setHighlights(
-        answered === 0
-          ? { status: 'failed' }
-          : { status: 'ready', highlight: newestHighlight(found) }
-      );
-    });
+    // The ledger itself, for the walk-forward heatmap. Its own request, because a slow
+    // or failed draw query must not take the scorecard down with it — and because the
+    // highlight must be computed from published numbers, not from a model summary.
+    void getLatestDraws(100, 'thai').then(
+      (rows) => {
+        if (cancelled) return;
+        setDraws({ status: 'ready', rows });
+      },
+      () => {
+        if (cancelled) return;
+        setDraws({ status: 'failed' });
+      }
+    );
 
     void getBasicPredictions().then(
       (payload) => {
@@ -406,6 +314,27 @@ export default function PerformanceScreen() {
   // as the first row of the list underneath.
   const [headline, ...earlier] = rows;
 
+  // One replay feeds both the card and the rows, so the two can never disagree about
+  // whether a draw was caught. Every board in it is built only from the draws before its
+  // target — the same walk-forward rule as the Backtest tab.
+  const replay = useMemo(() => {
+    if (draws.status !== 'ready') return [];
+    return replayHeatmapSignals(
+      draws.rows.map((row) => ({ date: row.date, code: row.bottomTwo })),
+      HIGHLIGHT_DRAWS
+    );
+  }, [draws]);
+
+  const signalByDate = useMemo(() => {
+    const map = new Map<string, HeatmapReplayRow>();
+    for (const row of replay) map.set(row.date, row);
+    return map;
+  }, [replay]);
+
+  // Newest row that a tracked signal actually caught. `replay` is newest first, so the
+  // first match is the latest one.
+  const highlight = replay.find((row) => row.hit !== null) ?? null;
+
   const onCheck = () => {
     setOutcome(checkTicket(ticket, latestDraw));
     setChecked(true);
@@ -414,7 +343,7 @@ export default function PerformanceScreen() {
   function retry() {
     setHistory({ status: 'loading' });
     setLatest({ status: 'loading' });
-    setHighlights({ status: 'loading' });
+    setDraws({ status: 'loading' });
     setReloadKey((value) => value + 1);
   }
 
@@ -638,14 +567,13 @@ export default function PerformanceScreen() {
           replay the rows below are built from — there is no hand-written win here, and
           when the ledgers have none the card says so instead of inventing one.
         */}
-        {history.status === 'ready' ? (
-          <SuccessHighlights
-            state={highlights}
-            drawsSearched={HIGHLIGHT_DRAWS}
-            language={language}
-            t={t}
-          />
-        ) : null}
+        <LatestHighlights
+          state={draws}
+          highlight={highlight}
+          drawsSearched={replay.length || HIGHLIGHT_DRAWS}
+          language={language}
+          t={t}
+        />
 
         {/*
           The draw that just happened, promoted out of the list: it is the one a reader
@@ -656,6 +584,7 @@ export default function PerformanceScreen() {
         {headline ? (
           <LatestDrawComparison
             point={headline}
+            signal={signalByDate.get(headline.draw_date)}
             language={language}
             t={t}
             colors={colors}
@@ -675,7 +604,13 @@ export default function PerformanceScreen() {
         {earlier.length > 0 ? (
           <View style={styles.history}>
             {earlier.map((point) => (
-              <HistoryRow key={point.draw_date} point={point} language={language} t={t} />
+              <HistoryRow
+                key={point.draw_date}
+                point={point}
+                signal={signalByDate.get(point.draw_date)}
+                language={language}
+                t={t}
+              />
             ))}
           </View>
         ) : null}
@@ -692,22 +627,34 @@ export default function PerformanceScreen() {
 }
 
 /**
- * The verified highlight above the list.
+ * The newest catch any tracked signal can prove, above the list.
  *
- * It is built from the replay the rows below it come from, so the number in it can be
- * checked by scrolling: same ledger, same baselines, same p-value rule. That is the
- * whole point of putting it here rather than in a marketing block — the claim and the
- * evidence sit an inch apart. When no ledger has a catch in the window the card states
- * the count instead of disappearing, because a silent card reads as "nothing to see"
- * while an empty one reads as "we checked".
+ * **Why this is a replay and still honest.** The app does not store a board before a
+ * draw, so the card cannot quote a recorded forecast. What it can do — and does — is
+ * rebuild the board from the draws that preceded its target and then mark the published
+ * result against it. The claim is therefore "had you looked at this board the day before
+ * the draw, the number was in the green band", which is checkable by re-running the same
+ * arithmetic on the same ledger. It is not "we predicted this", and the footnote says so.
+ *
+ * **Why the band, not the top pick.** A 00-99 board's #1 pick is a 1-in-100 call; a
+ * strict top-1 feed is mostly misses and reads as failure even when the model's
+ * structure is sound. The green band is the signal the product actually publishes —
+ * `HEATMAP_HIGH_SCORE` is the same threshold that colours the grid — so a draw landing
+ * there is a real result the UI can celebrate without moving a goalpost after the fact.
+ *
+ * When no signal in the window caught a draw, the card states the count instead of
+ * disappearing: a silent card reads as "nothing to see" while an empty one reads as
+ * "we checked".
  */
-function SuccessHighlights({
+function LatestHighlights({
   state,
+  highlight,
   drawsSearched,
   language,
   t,
 }: {
-  state: HighlightState;
+  state: DrawsState;
+  highlight: HeatmapReplayRow | null;
   drawsSearched: number;
   language: Language;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
@@ -726,8 +673,8 @@ function SuccessHighlights({
     );
   }
 
-  const highlight = state.highlight;
-  if (!highlight) {
+  const hit = highlight?.hit ?? null;
+  if (!highlight || !hit) {
     return (
       <View style={[styles.highlight, { borderColor: colors.cardBorder, backgroundColor: colors.backgroundElement }]}>
         <ThemedText type="smallBold" style={styles.highlightTitle}>
@@ -743,9 +690,9 @@ function SuccessHighlights({
     );
   }
 
-  // Green only for the number the model ranked first; gold for a top-five catch, which is
-  // a weaker claim and is labelled as one.
-  const tone = highlight.kind === 'exact' ? colors.success : colors.gold;
+  // Green for every catch a model made on its own; gold only for top-five membership,
+  // which is a weaker claim and is labelled as one.
+  const tone = hit.source === 'top5' ? colors.gold : colors.success;
 
   return (
     <View style={[styles.highlight, { borderColor: `${tone}59`, backgroundColor: `${tone}12` }]}>
@@ -772,53 +719,28 @@ function SuccessHighlights({
           <View style={styles.highlightTagRow}>
             <View style={[styles.highlightTag, { backgroundColor: `${tone}26` }]}>
               <ThemedText type="small" style={[styles.highlightTagText, { color: tone }]}>
-                {t(
-                  highlight.kind === 'exact'
-                    ? 'performance.sourceTop1'
-                    : 'performance.sourceTop5'
-                )}
+                {t(SOURCE_LABEL_KEYS[hit.source])}
               </ThemedText>
             </View>
             <ThemedText type="small" themeColor="textMuted" style={styles.highlightMeta}>
-              {t(COUNTRY_LABEL_KEYS[highlight.lotteryType])} ·{' '}
-              {formatLocalizedDate(highlight.drawDate, language)}
+              {formatLocalizedDate(highlight.date, language)}
             </ThemedText>
           </View>
 
           <ThemedText type="small" themeColor="textSecondary" style={styles.highlightLine}>
-            {t(
-              highlight.kind === 'exact'
-                ? 'performance.highlightsExactBody'
-                : 'performance.highlightsTop5Body',
-              { number: highlight.actual }
-            )}
+            {t(SOURCE_BODY_KEYS[hit.source], { number: highlight.actual })}
           </ThemedText>
 
           <ThemedText type="small" themeColor="textMuted" style={styles.highlightLine}>
-            {t('performance.highlightsChannel', {
-              channel: t(CHANNEL_LABEL_KEYS[highlight.channel]),
-            })}
+            {t('performance.highlightsScore', { score: Math.round(hit.score) })}
           </ThemedText>
         </View>
       </View>
 
-      <ThemedText type="small" themeColor="textSecondary" style={styles.highlightStats}>
-        {t('performance.highlightsRate', {
-          hits: highlight.hits,
-          draws: highlight.picks,
-          rate: percent(highlight.percent),
-          baseline: percent(highlight.baseline),
+      <ThemedText type="small" themeColor="textMuted" style={styles.highlightFootnote}>
+        {t('performance.highlightsChannel', {
+          channel: t(CHANNEL_LABEL_KEYS.bottom),
         })}
-      </ThemedText>
-      <ThemedText type="small" themeColor="textMuted" style={styles.highlightStats}>
-        {highlight.pValue === null
-          ? ''
-          : `${t('performance.highlightsP', { p: formatP(highlight.pValue) })} · `}
-        {t(
-          highlight.significant
-            ? 'performance.highlightsSignificant'
-            : 'performance.highlightsNotSignificant'
-        )}
       </ThemedText>
       <ThemedText type="small" themeColor="textMuted" style={styles.highlightFootnote}>
         {t('performance.highlightsReplay')}
@@ -830,11 +752,13 @@ function SuccessHighlights({
 /** The newest draw, as a side-by-side prediction / result comparison. */
 function LatestDrawComparison({
   point,
+  signal,
   language,
   t,
   colors,
 }: {
   point: BacktestTimelinePoint;
+  signal?: HeatmapReplayRow;
   language: Language;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
   colors: {
@@ -846,7 +770,25 @@ function LatestDrawComparison({
     text: string;
   };
 }) {
-  const verdict = verdictOf(point, colors);
+  // The server's verdict wins when it has one; the heatmap replay fills the gap when a
+  // draw matched a signal the server's top-five rule does not describe.
+  const source: HeatmapSignalSource | null = point.exact_hit
+    ? 'top1'
+    : point.top_5_hit
+      ? 'top5'
+      : (signal?.hit?.source ?? null);
+  const sourceTone = source === 'top5' ? colors.gold : colors.success;
+
+  // The badge must agree with the tag underneath it: an exact hit is green “HIT”, a
+  // top-five catch gold, any other verified signal a green “HIT” in its own right, and
+  // only a draw no signal caught is grey.
+  const verdict = point.exact_hit
+    ? { labelKey: 'performance.hit' as const, color: colors.success }
+    : source === 'top5'
+      ? { labelKey: 'performance.inTop5' as const, color: colors.gold }
+      : source
+        ? { labelKey: 'performance.signalHit' as const, color: colors.success }
+        : { labelKey: 'performance.miss' as const, color: colors.neutral };
 
   return (
     <View
@@ -907,16 +849,9 @@ function LatestDrawComparison({
               {point.actual}
             </ThemedText>
           </View>
-          {point.exact_hit || point.top_5_hit ? (
-            <ThemedText
-              type="small"
-              style={[
-                styles.latestSource,
-                { color: point.exact_hit ? colors.success : colors.gold },
-              ]}>
-              {t(
-                point.exact_hit ? 'performance.sourceTop1' : 'performance.sourceTop5'
-              )}
+          {source ? (
+            <ThemedText type="small" style={[styles.latestSource, { color: sourceTone }]}>
+              {t(SOURCE_LABEL_KEYS[source])}
             </ThemedText>
           ) : null}
         </View>
@@ -976,17 +911,36 @@ function EvidenceStrip({
 /** One earlier replayed draw: the model's pick, the actual result, and the verdict. */
 function HistoryRow({
   point,
+  signal,
   language,
   t,
 }: {
   point: BacktestTimelinePoint;
+  signal?: HeatmapReplayRow;
   language: Language;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }) {
   const { colors } = useAppTheme();
-  const verdict = verdictOf(point, colors);
-  const caught = point.exact_hit === 1 || point.top_5_hit === 1;
-  const caughtTone = point.exact_hit ? colors.success : colors.gold;
+
+  // Every tracked signal is considered, not just the top pick: the server's exact and
+  // top-five verdicts first, then the heatmap replay's (band, Markov, frequency,
+  // momentum). The row then names whichever one actually caught the draw, so a green
+  // HIT never means "the top pick got it" when it was the board's green band that did.
+  const source: HeatmapSignalSource | null = point.exact_hit
+    ? 'top1'
+    : point.top_5_hit
+      ? 'top5'
+      : (signal?.hit?.source ?? null);
+  const caught = source !== null;
+  const caughtTone = source === 'top5' ? colors.gold : colors.success;
+
+  const badge = point.exact_hit
+    ? { key: 'performance.hit' as const, color: colors.success }
+    : source === 'top5'
+      ? { key: 'performance.inTop5' as const, color: colors.gold }
+      : source
+        ? { key: 'performance.signalHit' as const, color: colors.success }
+        : { key: 'performance.miss' as const, color: colors.neutral };
 
   return (
     <View style={[styles.historyRow, { borderTopColor: colors.cardBorder }]}>
@@ -1026,16 +980,14 @@ function HistoryRow({
           style={[styles.actualValue, caught && { color: caughtTone }]}>
           {point.actual}
         </ThemedText>
-        <View style={[styles.hitBadge, { backgroundColor: `${verdict.color}22` }]}>
-          <ThemedText type="small" style={[styles.hitText, { color: verdict.color }]}>
-            {t(verdict.labelKey)}
+        <View style={[styles.hitBadge, { backgroundColor: `${badge.color}22` }]}>
+          <ThemedText type="small" style={[styles.hitText, { color: badge.color }]}>
+            {t(badge.key)}
           </ThemedText>
         </View>
-        {caught ? (
+        {source ? (
           <ThemedText type="small" style={[styles.sourceTagText, { color: caughtTone }]}>
-            {t(
-              point.exact_hit ? 'performance.sourceTop1' : 'performance.sourceTop5'
-            )}
+            {t(SOURCE_LABEL_KEYS[source])}
           </ThemedText>
         ) : null}
       </View>

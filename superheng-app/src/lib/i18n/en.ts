@@ -610,11 +610,37 @@ export const en = {
   'insights.trendSubtitle': 'Share of even digits and high digits over time',
   'insights.parity': 'Even / Odd',
   'insights.range': 'High / Low',
-  'insights.heatmapTitle': 'Frequency heatmap',
-  'insights.heatmapSubtitle': 'Every 2-digit code · darker is drawn more often',
-  'insights.heatmapHint': 'Tap a cell to analyse that number',
-  'insights.legendLow': 'Low',
-  'insights.legendHigh': 'High',
+  'insights.heatmapTitle': 'Four-model heatmap',
+  'insights.heatmapSubtitle': 'Bottom two digits · next draw · weighted ensemble score',
+  'insights.heatmapHint':
+    'Tap a cell to analyse that number · a green cell is in the board’s strongest band',
+  'insights.heatmapLoading': 'Computing from the published draws…',
+  'insights.heatmapThin': 'At least {draws} draws are needed to build the heatmap.',
+  'insights.heatmapBlend':
+    'Ensemble score = weighted sum of four models (25% each)',
+  'insights.heatmapMarkovName': 'Markov chain · draw-to-draw transitions',
+  'insights.heatmapMarkovBody':
+    'How likely the latest code is to be followed by each other code, shrunk toward ' +
+    'the long-run frequency while the observed transitions are still few.',
+  'insights.heatmapFrequencyName': 'Historical frequency · long-run baseline',
+  'insights.heatmapFrequencyBody':
+    'How often each code appeared across the whole window, smoothed so a code that ' +
+    'never appeared is rare rather than impossible.',
+  'insights.heatmapMomentumName': 'Recency / momentum · hot and cold',
+  'insights.heatmapMomentumBody':
+    'The last ten draws weighted by age (three-draw half-life), so numbers trending ' +
+    'right now count for more.',
+  'insights.heatmapMontecarloName': 'Monte Carlo · {paths} simulated paths',
+  'insights.heatmapMontecarloBody':
+    'Simulates the next draw {paths} times from the measured mean, standard deviation ' +
+    'and mean reversion of the real ledger.',
+  'insights.heatmapScale':
+    'The 0–100 score is a percentile against the other 99 codes on this board, not a ' +
+    'probability · green cells score 75 or above · the strongest code’s chance is ' +
+    '{probability}% per draw (uniform baseline 1.00%).',
+  'insights.heatmapSample': 'Computed from {draws} draws · {from} → {to}',
+  'insights.legendLow': 'Weak',
+  'insights.legendHigh': 'Strong',
   'insights.parityNote':
     'Share of odd digits per draw. Spikes above 50% suggest a parity tilt.',
   'insights.rangeNote':
@@ -735,30 +761,41 @@ export const en = {
   'performance.evidenceUniform': 'No edge over the uniform rate',
   // The verified highlight above the list. It is filled from the replay, never written
   // by hand, and it names the weakest claim it can make (top five) as exactly that.
-  'performance.highlightsTitle': '🔥 Latest verified highlight',
+  'performance.highlightsTitle': '🔥 Latest AI highlights',
   'performance.highlightsExactBody':
     'The draw came out {number} — the exact code the model ranked first.',
   'performance.highlightsTop5Body':
     'The draw came out {number}, and it was one of the five codes the model shortlisted.',
+  // Only used when the drawn code was in the board's green band before the draw
+  // (score >= 75, the same HIGH definition as the heatmap colours).
+  'performance.highlightsHeatmapBody':
+    'Bullseye — {number} came from the Heatmap at HIGH signal strength.',
+  'performance.highlightsMarkovBody':
+    'The draw came out {number} — the #1 code from the Markov model’s board.',
+  'performance.highlightsFrequencyBody':
+    'The draw came out {number} — the #1 code by long-run frequency on that board.',
+  'performance.highlightsMomentumBody':
+    'The draw came out {number} — the hottest code on that board’s momentum ranking.',
+  'performance.highlightsScore': 'Signal score {score}/100 on the pre-draw board',
   'performance.highlightsChannel': 'Channel: {channel}',
-  'performance.highlightsRate':
-    'Top-five catches: {hits} of {draws} draws ({rate}) · uniform baseline {baseline}',
-  'performance.highlightsP': 'p = {p}',
-  'performance.highlightsSignificant': 'significant against chance',
-  'performance.highlightsNotSignificant': 'not yet significant against chance',
   'performance.highlightsReplay':
     'Walk-forward replay of the same ledger as the list below, not a stored forecast. ' +
     'Past results do not predict the next draw.',
   'performance.highlightsEmpty':
-    'No scored signal caught a draw in the last {draws} draws, across the ledgers we ' +
-    'replay.',
+    'No tracked signal caught a draw in the last {draws} draws of the Thai ledger.',
   'performance.highlightsEmptyBody':
     'This card fills in only when a published result matches a signal we can replay — ' +
-    'the #1 pick, or the top five. Nothing in it is written by hand.',
+    'the #1 pick, the top five, the heatmap’s green band, or one model’s single pick. ' +
+    'Nothing in it is written by hand.',
   'performance.highlightsFailed':
     'Highlights are unavailable right now: the replay ledgers did not answer.',
   'performance.sourceTop5': 'from Top 5',
   'performance.sourceTop1': 'from AI #1',
+  'performance.sourceHeatmap': 'from Heatmap',
+  'performance.sourceMarkov': 'from Markov',
+  'performance.sourceFrequency': 'from Frequency',
+  'performance.sourceMomentum': 'from Momentum',
+  'performance.signalHit': 'HIT',
   'performance.aiPredicted': 'AI predicted',
   'performance.actualResult': 'Actual result',
   'performance.hit': 'HIT',

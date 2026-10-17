@@ -508,11 +508,29 @@ export const th: Record<TranslationKey, string> = {
   'insights.trendSubtitle': 'สัดส่วนเลขคู่และเลขสูงตามช่วงเวลา',
   'insights.parity': 'คู่ / คี่',
   'insights.range': 'สูง / ต่ำ',
-  'insights.heatmapTitle': 'แผนความถี่',
-  'insights.heatmapSubtitle': 'ทุกเลข 2 หลัก · สีเข้มคือออกบ่อยกว่า',
-  'insights.heatmapHint': 'แตะช่องเพื่อวิเคราะห์เลขนั้น',
-  'insights.legendLow': 'ต่ำ',
-  'insights.legendHigh': 'สูง',
+  'insights.heatmapTitle': 'แผนความร้อน 4 โมเดล',
+  'insights.heatmapSubtitle': 'เลขท้าย 2 ตัว · งวดถัดไป · คะแนนรวมแบบถ่วงน้ำหนัก',
+  'insights.heatmapHint': 'แตะช่องเพื่อวิเคราะห์เลขนั้น · ช่องเขียวคือกลุ่มสัญญาณแรงสุดของกระดาน',
+  'insights.heatmapLoading': 'กำลังคำนวณจากผลออกรางวัลจริง…',
+  'insights.heatmapThin': 'ต้องมีอย่างน้อย {draws} งวดจึงจะคำนวณแผนความร้อนได้',
+  'insights.heatmapBlend': 'คะแนนรวม = ผลรวมถ่วงน้ำหนักของ 4 โมเดล (โมเดลละ 25%)',
+  'insights.heatmapMarkovName': 'Markov chain · การเปลี่ยนสถานะข้ามงวด',
+  'insights.heatmapMarkovBody':
+    'โอกาสที่เลขจะเปลี่ยนจากเลขงวดล่าสุดไปเป็นเลขใด โดยถ่วงน้ำหนักด้วยความถี่ระยะยาวเมื่อจำนวนการเปลี่ยนสถานะที่สังเกตได้ยังน้อย',
+  'insights.heatmapFrequencyName': 'Historical frequency · ความถี่ระยะยาว',
+  'insights.heatmapFrequencyBody':
+    'อัตราการออกของแต่ละเลขตลอดทั้งชุดข้อมูล พร้อมการปรับให้เรียบเพื่อไม่ให้เลขที่ไม่เคยออกกลายเป็นศูนย์',
+  'insights.heatmapMomentumName': 'Recency / momentum · ความร้อน-เย็น',
+  'insights.heatmapMomentumBody':
+    'ให้น้ำหนัก 10 งวดล่าสุดแบบลดหลั่นตามเวลา (ครึ่งชีวิต 3 งวด) เพื่อจับเลขที่กำลังมาแรง',
+  'insights.heatmapMontecarloName': 'Monte Carlo · จำลอง {paths} เส้นทาง',
+  'insights.heatmapMontecarloBody':
+    'จำลองงวดถัดไป {paths} ครั้งจากค่าเฉลี่ย ส่วนเบี่ยงเบนมาตรฐาน และการดึงกลับเข้าหาค่าเฉลี่ย (mean reversion) ที่วัดได้จากข้อมูลจริง',
+  'insights.heatmapScale':
+    'คะแนน 0–100 คืออันดับความแรงเทียบกับเลขทั้ง 100 ตัวบนกระดานนี้ ไม่ใช่ความน่าจะเป็น · ช่องเขียวคือคะแนน 75 ขึ้นไป · เลขแรงสุดมีโอกาส {probability}% ต่องวด (ฐานสุ่ม 1.00%)',
+  'insights.heatmapSample': 'คำนวณจาก {draws} งวด · {from} → {to}',
+  'insights.legendLow': 'อ่อน',
+  'insights.legendHigh': 'แรง',
   'insights.parityNote': 'สัดส่วนเลขคี่ในแต่ละงวด ค่าที่เกิน 50% บ่งชี้ว่าช่วงนั้นเอียงไปทางเลขคี่',
   'insights.rangeNote': 'สัดส่วนเลขสูง (5–9) ในแต่ละงวด ใช้ประกอบการเลือกช่วงเลข',
   'insights.aiLogTitle': 'บันทึกเหตุผล AI',
@@ -605,22 +623,34 @@ export const th: Record<TranslationKey, string> = {
   'performance.evidenceUniform': 'ไม่ต่างจากอัตราฐาน',
   // การ์ดผลงานเด่น: เติมจากผล replay จริงเท่านั้น และระบุให้ชัดว่าเป็นการ “ติด 5 อันดับ”
   // ซึ่งเป็นข้อกล่าวอ้างที่อ่อนกว่า “ทายถูก”
-  'performance.highlightsTitle': '🔥 ผลงานเด่นที่ตรวจสอบได้ล่าสุด',
+  'performance.highlightsTitle': '🔥 ผลงานเด่นงวดล่าสุด (Latest AI Highlights)',
   'performance.highlightsExactBody': 'งวดนี้ออกเลข {number} ตรงกับเลขอันดับ 1 ที่โมเดลเลือก',
   'performance.highlightsTop5Body': 'งวดนี้ออกเลข {number} และอยู่ใน 5 อันดับแรกที่โมเดลจัดอันดับไว้',
+  // ข้อความนี้ใช้ได้เฉพาะเมื่อเลขที่ออกอยู่ในแถบเขียวของกระดานก่อนออกรางวัล
+  // (คะแนน ≥ 75 ซึ่งเป็นนิยาม HIGH เดียวกับสีบน Heatmap) เท่านั้น
+  'performance.highlightsHeatmapBody':
+    'เจาะเข้าเป้า! เลข {number} อยู่ในแถบสัญญาณแรง (HIGH) ของ Heatmap ก่อนออกรางวัล',
+  'performance.highlightsMarkovBody':
+    'งวดนี้ออกเลข {number} ซึ่งเป็นเลขอันดับ 1 ของโมเดล Markov ในงวดนั้น',
+  'performance.highlightsFrequencyBody':
+    'งวดนี้ออกเลข {number} ซึ่งเป็นเลขอันดับ 1 ของความถี่ระยะยาวในงวดนั้น',
+  'performance.highlightsMomentumBody':
+    'งวดนี้ออกเลข {number} ซึ่งเป็นเลขที่โมเมนตัม (เลขร้อน) จัดอันดับสูงสุดในงวดนั้น',
+  'performance.highlightsScore': 'คะแนนสัญญาณ {score}/100 บนกระดานก่อนออกรางวัล',
   'performance.highlightsChannel': 'ช่อง: {channel}',
-  'performance.highlightsRate': 'ติด 5 อันดับ {hits} จาก {draws} งวด ({rate}) · ฐานสุ่ม {baseline}',
-  'performance.highlightsP': 'p = {p}',
-  'performance.highlightsSignificant': 'ต่างจากโอกาสสุ่มอย่างมีนัยสำคัญ',
-  'performance.highlightsNotSignificant': 'ยังไม่ต่างจากโอกาสสุ่มอย่างมีนัยสำคัญ',
   'performance.highlightsReplay':
     'คำนวณย้อนหลังด้วยข้อมูลชุดเดียวกับรายการด้านล่าง ไม่ใช่บันทึกคำทำนายที่เก็บไว้ ผลในอดีตไม่ทำนายงวดถัดไป',
-  'performance.highlightsEmpty': 'ยังไม่มีสัญญาณใดจับเลขที่ออกได้ใน {draws} งวดล่าสุดของทุกตลาดที่เราตรวจ',
+  'performance.highlightsEmpty': 'ยังไม่มีสัญญาณใดจับเลขที่ออกได้ใน {draws} งวดล่าสุดของตลาดไทย',
   'performance.highlightsEmptyBody':
-    'การ์ดนี้จะขึ้นเมื่อผลที่ประกาศตรงกับสัญญาณที่เราคำนวณย้อนกลับได้เท่านั้น คือเลขอันดับ 1 หรือ 5 อันดับแรก ไม่มีตัวเลขใดถูกเขียนขึ้นเอง',
+    'การ์ดนี้จะขึ้นเมื่อผลที่ประกาศตรงกับสัญญาณที่เราคำนวณย้อนกลับได้เท่านั้น คือเลขอันดับ 1, 5 อันดับแรก, แถบเขียวของ Heatmap หรือเลขอันดับ 1 ของ Markov/Frequency ไม่มีตัวเลขใดถูกเขียนขึ้นเอง',
   'performance.highlightsFailed': 'ยังดึงผลงานเด่นไม่ได้ในตอนนี้ ระบบคำนวณย้อนหลังไม่ตอบสนอง',
   'performance.sourceTop5': 'จาก Top 5',
   'performance.sourceTop1': 'จาก AI อันดับ 1',
+  'performance.sourceHeatmap': 'จาก Heatmap',
+  'performance.sourceMarkov': 'จาก Markov',
+  'performance.sourceFrequency': 'จาก Frequency',
+  'performance.sourceMomentum': 'จาก Momentum',
+  'performance.signalHit': 'เข้าเป้า',
   'performance.aiPredicted': 'AI ทำนาย',
   'performance.actualResult': 'ผลออกรางวัล',
   'performance.hit': 'ถูกรางวัล',

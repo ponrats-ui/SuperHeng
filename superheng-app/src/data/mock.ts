@@ -100,8 +100,6 @@ export type TopPick = {
   radar: number[];
 };
 
-export type HeatCell = { code: string; probability: number };
-
 export type TrendPoint = {
   /** Draw index (1 = most recent, 10 = oldest). */
   draw: number;
@@ -197,7 +195,7 @@ export const RANKINGS: Record<'top' | 'bottom', RankEntry[]> = {
 };
 
 // ---------------------------------------------------------------------------
-// 00-99 heatmap
+// "My Number" demo figure — not the heatmap
 // ---------------------------------------------------------------------------
 
 /** Deterministic 32-bit hash -> 0..1, so mock data never reshuffles on reload. */
@@ -208,26 +206,20 @@ function hash01(seed: number): number {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
-/** Builds the 00-99 probability grid, aligning ranked codes to their bars. */
-export function buildHeatmap(): HeatCell[] {
-  const overrides = new Map<string, number>();
-  for (const entry of [...RANKINGS.top, ...RANKINGS.bottom]) {
-    overrides.set(entry.code, entry.probability * 4 + 8); // scale 0-100-ish
-  }
-
-  return Array.from({ length: 100 }, (_, index) => {
-    const code = index.toString().padStart(2, '0');
-    const override = overrides.get(code);
-    const probability =
-      override ?? Math.round((4 + hash01(index * 7919 + 13) * 62 + (index % 10) * 1.4) * 10) / 10;
-    return { code, probability: Math.min(100, Math.round(probability * 10) / 10) };
-  });
-}
-
-/** Convenience lookup: probability for a specific 2-digit code. */
-export function heatProbability(code: string): number {
-  const cell = buildHeatmap().find((entry) => entry.code === code);
-  return cell?.probability ?? 0;
+/**
+ * A deterministic 0-100 figure for the demo analyzer's copy.
+ *
+ * This is **not** the heatmap. The Insights grid is a real ensemble over the published
+ * ledger (`lib/heatmap.ts`); this number only fills a sentence on the "My Number" demo,
+ * which is hand-written sample analysis rather than a model output. It is private so no
+ * screen can mistake it for the grid.
+ */
+function sampleHeatScore(code: string): number {
+  const index = Number(code.slice(-2));
+  if (!Number.isFinite(index)) return 0;
+  const override = [...RANKINGS.top, ...RANKINGS.bottom].find((entry) => entry.code === code);
+  if (override) return Math.min(100, Math.round((override.probability * 4 + 8) * 10) / 10);
+  return Math.round((4 + hash01(index * 7919 + 13) * 62 + (index % 10) * 1.4) * 10) / 10;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +259,7 @@ export function analyzeNumber(input: string): NumberAnalysis {
   const code = input.replace(/\D/g, '').padStart(2, '0').slice(0, 3);
   const seed = [...code].reduce((acc, char) => acc * 31 + char.charCodeAt(0), 7);
   const score = 52 + Math.round(hash01(seed) * 45);
-  const probability = heatProbability(code.slice(-2));
+  const probability = sampleHeatScore(code.slice(-2));
   const appearances = 3 + Math.round(hash01(seed + 91) * 22);
   const wonRecently = hash01(seed + 5) > 0.5;
 

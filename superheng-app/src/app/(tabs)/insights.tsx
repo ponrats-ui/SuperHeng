@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
-import { useState } from 'react';
-import { StyleSheet, useWindowDimensions, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import {
   AppHeader,
@@ -13,9 +13,19 @@ import {
 } from '@/components/superheng';
 import { ThemedText } from '@/components/themed-text';
 import { DataColors, Radius, Spacing, TabletContentWidth } from '@/constants/theme';
-import { AI_LOG, TREND_SERIES, buildHeatmap } from '@/data/mock';
+import { AI_LOG, TREND_SERIES } from '@/data/mock';
 import { useAppTheme } from '@/hooks/use-app-theme';
-import { formatLocalizedDate } from '@/lib/format';
+import { getLatestDraws } from '@/lib/api';
+import { apiErrorText, type ApiErrorText } from '@/lib/api-error';
+import { formatCount, formatLocalizedDate } from '@/lib/format';
+import {
+  HEATMAP_SIMULATIONS,
+  HEATMAP_WEIGHTS,
+  MIN_HEATMAP_DRAWS,
+  buildHeatmapBoard,
+  type HeatmapBoard,
+  type HeatmapModel,
+} from '@/lib/heatmap';
 import { useTranslation, type TranslationKey } from '@/lib/i18n';
 
 type TrendMode = 'parity' | 'range';
@@ -39,6 +49,55 @@ const LOG_COPY: Record<string, { headline: TranslationKey; detail: TranslationKe
   'log-4': { headline: 'insights.log.log4.headline', detail: 'insights.log.log4.detail' },
 };
 
+/**
+ * The four models under the grid, in the order the weights are listed.
+ *
+ * Every line here describes what the code in `lib/heatmap.ts` actually does — the
+ * shrinkage, the decay half-life, the simulation count. Marketing copy that outran the
+ * model would be the same problem as a fake probability, only in prose.
+ */
+const HEATMAP_MODELS: readonly {
+  model: HeatmapModel;
+  name: TranslationKey;
+  body: TranslationKey;
+}[] = [
+  {
+    model: 'markov',
+    name: 'insights.heatmapMarkovName',
+    body: 'insights.heatmapMarkovBody',
+  },
+  {
+    model: 'frequency',
+    name: 'insights.heatmapFrequencyName',
+    body: 'insights.heatmapFrequencyBody',
+  },
+  {
+    model: 'momentum',
+    name: 'insights.heatmapMomentumName',
+    body: 'insights.heatmapMomentumBody',
+  },
+  {
+    model: 'montecarlo',
+    name: 'insights.heatmapMontecarloName',
+    body: 'insights.heatmapMontecarloBody',
+  },
+];
+
+type HeatmapState =
+  | { status: 'loading' }
+  | { status: 'ready'; board: HeatmapBoard }
+  | { status: 'empty' }
+  | { status: 'failed'; text: ApiErrorText };
+
+/**
+ * How much ledger the board reads: the endpoint's maximum, 100 draws.
+ *
+ * The window is stated under the grid rather than left implicit, because the frequency
+ * and transition estimates are only as wide as these draws — quoting a score without
+ * its sample is the habit this screen exists to avoid.
+ */
+const HEATMAP_DRAW_WINDOW = 100;
+
 const CONFIDENCE_KEYS = {
   High: 'confidence.high',
   Medium: 'confidence.medium',
@@ -50,9 +109,37 @@ export default function InsightsScreen() {
   const { t, language } = useTranslation();
   const { width } = useWindowDimensions();
   const [mode, setMode] = useState<TrendMode>('parity');
+  const [heatmap, setHeatmap] = useState<HeatmapState>({ status: 'loading' });
 
   const twoColumn = width >= TWO_COLUMN_BREAKPOINT;
-  const cells = buildHeatmap();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void getLatestDraws(HEATMAP_DRAW_WINDOW, 'thai').then(
+      (rows) => {
+        if (cancelled) return;
+        const board = buildHeatmapBoard(
+          rows.map((row) => ({ date: row.date, code: row.bottomTwo }))
+        );
+        setHeatmap(board ? { status: 'ready', board } : { status: 'empty' });
+      },
+      (caught: unknown) => {
+        if (cancelled) return;
+        setHeatmap({ status: 'failed', text: apiErrorText(caught) });
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const board = heatmap.status === 'ready' ? heatmap.board : null;
+  const topCell = useMemo(
+    () => (board ? board.byCode[board.signals.top1] : null),
+    [board]
+  );
 
   const trendOptions = [
     { key: 'parity' as const, label: t('insights.parity') },
@@ -100,26 +187,101 @@ export default function InsightsScreen() {
               title={t('insights.heatmapTitle')}
               subtitle={t('insights.heatmapSubtitle')}
             />
-            <View style={styles.heatmapWrap}>
-              <Heatmap
-                cells={cells}
-                onSelect={(code) => router.push({ pathname: '/my-number', params: { code } })}
-              />
-            </View>
-            <ThemedText type="small" themeColor="textMuted" style={styles.chartNote}>
-              {t('insights.heatmapHint')}
-            </ThemedText>
-            <View style={styles.legend}>
-              <ThemedText type="small" themeColor="textMuted" style={styles.legendLabel}>
-                {t('insights.legendLow')}
+
+            {heatmap.status === 'loading' ? (
+              <View style={styles.stateRow}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <ThemedText type="small" themeColor="textMuted">
+                  {t('insights.heatmapLoading')}
+                </ThemedText>
+              </View>
+            ) : null}
+
+            {heatmap.status === 'failed' ? (
+              <ThemedText type="small" themeColor="textMuted" style={styles.chartNote}>
+                {t(heatmap.text.key, heatmap.text.params)}
               </ThemedText>
-              {[DataColors.cold, DataColors.low, DataColors.medium, DataColors.high].map((color) => (
-                <View key={color} style={[styles.legendSwatch, { backgroundColor: color }]} />
-              ))}
-              <ThemedText type="small" themeColor="textMuted" style={styles.legendLabel}>
-                {t('insights.legendHigh')}
+            ) : null}
+
+            {heatmap.status === 'empty' ? (
+              <ThemedText type="small" themeColor="textMuted" style={styles.chartNote}>
+                {t('insights.heatmapThin', { draws: MIN_HEATMAP_DRAWS })}
               </ThemedText>
-            </View>
+            ) : null}
+
+            {board && topCell ? (
+              <>
+                <View style={styles.heatmapWrap}>
+                  <Heatmap
+                    cells={board.cells}
+                    onSelect={(code) => router.push({ pathname: '/my-number', params: { code } })}
+                  />
+                </View>
+                <ThemedText type="small" themeColor="textMuted" style={styles.chartNote}>
+                  {t('insights.heatmapHint')}
+                </ThemedText>
+                <View style={styles.legend}>
+                  <ThemedText type="small" themeColor="textMuted" style={styles.legendLabel}>
+                    {t('insights.legendLow')}
+                  </ThemedText>
+                  {[DataColors.cold, DataColors.low, DataColors.medium, DataColors.high].map(
+                    (color) => (
+                      <View
+                        key={color}
+                        style={[styles.legendSwatch, { backgroundColor: color }]}
+                      />
+                    )
+                  )}
+                  <ThemedText type="small" themeColor="textMuted" style={styles.legendLabel}>
+                    {t('insights.legendHigh')}
+                  </ThemedText>
+                </View>
+
+                {/*
+                  What the score is, model by model. The weights are printed from the
+                  same table the arithmetic uses (`HEATMAP_WEIGHTS`), so the panel cannot
+                  promise a blend the code does not apply.
+                */}
+                <View style={[styles.models, { borderTopColor: colors.cardBorder }]}>
+                  <ThemedText type="smallBold">{t('insights.heatmapBlend')}</ThemedText>
+                  {HEATMAP_MODELS.map((model) => (
+                    <View key={model.name} style={styles.modelRow}>
+                      <View style={[styles.modelWeight, { backgroundColor: `${colors.gold}1F` }]}>
+                        <ThemedText
+                          type="small"
+                          style={[styles.modelWeightText, { color: colors.accent }]}>
+                          {`${Math.round(HEATMAP_WEIGHTS[model.model] * 100)}%`}
+                        </ThemedText>
+                      </View>
+                      <View style={styles.modelText}>
+                        <ThemedText type="smallBold">
+                          {t(model.name, { paths: formatCount(HEATMAP_SIMULATIONS) })}
+                        </ThemedText>
+                        <ThemedText
+                          type="small"
+                          themeColor="textSecondary"
+                          style={styles.modelBody}>
+                          {t(model.body, { paths: formatCount(HEATMAP_SIMULATIONS) })}
+                        </ThemedText>
+                      </View>
+                    </View>
+                  ))}
+
+                  <ThemedText type="small" themeColor="textMuted" style={styles.chartNote}>
+                    {t('insights.heatmapScale', {
+                      probability: topCell.probability.toFixed(2),
+                    })}
+                  </ThemedText>
+                  <ThemedText type="small" themeColor="textMuted" style={styles.chartNote}>
+                    {t('insights.heatmapSample', {
+                      draws: board.sample.draws,
+                      from: formatLocalizedDate(board.sample.from, language),
+                      to: formatLocalizedDate(board.sample.to, language),
+                    })}
+                  </ThemedText>
+                </View>
+              </>
+            ) : null}
           </Card>
         </View>
 
@@ -214,6 +376,43 @@ const styles = StyleSheet.create({
   },
   heatmapWrap: {
     marginTop: Spacing.three,
+  },
+  stateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginTop: Spacing.three,
+  },
+  models: {
+    marginTop: Spacing.three,
+    paddingTop: Spacing.two,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: Spacing.two,
+  },
+  modelRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.two,
+  },
+  modelWeight: {
+    minWidth: 40,
+    alignItems: 'center',
+    paddingHorizontal: Spacing.one,
+    paddingVertical: 1,
+    borderRadius: Radius.pill,
+  },
+  modelWeightText: {
+    fontSize: 10,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  modelText: {
+    flex: 1,
+    gap: 1,
+  },
+  modelBody: {
+    fontSize: 11,
+    lineHeight: 16,
   },
   legend: {
     flexDirection: 'row',

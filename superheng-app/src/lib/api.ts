@@ -264,6 +264,21 @@ export type LotteryType = 'thai' | 'laos' | 'vietnam';
 export const LOTTERY_TYPES: readonly LotteryType[] = ['thai', 'laos', 'vietnam'];
 
 /**
+ * One published draw, as `/api/latest-draws` returns it.
+ *
+ * `bottomTwo` is the separately drawn เลขท้าย 2 ตัว — the 2-digit prize a 00-99
+ * heatmap is actually modelling. It is not derived from `firstPrize`: GLO draws the
+ * two prizes independently, which is why the ensemble never reads the first prize's
+ * trailing digits as if they were the same variable.
+ */
+export type LatestDrawRow = {
+  date: string;
+  firstPrize: string;
+  bottomTwo: string;
+  lotteryType: LotteryType;
+};
+
+/**
  * Response key for a modelled position of a first prize.
  *
  * Every key a lottery can publish is listed; which ones a response actually
@@ -850,6 +865,36 @@ function toLotteryType(value: unknown): LotteryType {
   return typeof value === 'string' && (LOTTERY_TYPES as readonly string[]).includes(value)
     ? (value as LotteryType)
     : 'thai';
+}
+
+/**
+ * Normalises the draw ledger, dropping rows a replay cannot use.
+ *
+ * The endpoint selects `*`, so a future column is fine; a row missing its date or a
+ * two-digit result is not, because the heatmap's whole sample is those two fields.
+ * Malformed rows are skipped rather than throwing: one bad insertion must not blank
+ * the ledger's history, and the remaining rows are still exactly what was published.
+ */
+export function parseLatestDraws(body: unknown): LatestDrawRow[] {
+  if (!Array.isArray(body)) {
+    throw new ApiError('malformed', 'The draw service returned a non-list body.');
+  }
+
+  const rows: LatestDrawRow[] = [];
+  for (const raw of body) {
+    const row = asRecord(raw);
+    if (!row) continue;
+    const date = asString(row.draw_date);
+    const bottomTwo = asString(row.bottom_two);
+    if (!date || !/^\d{2}$/.test(bottomTwo)) continue;
+    rows.push({
+      date,
+      firstPrize: asString(row.first_prize),
+      bottomTwo,
+      lotteryType: toLotteryType(row.lottery_type),
+    });
+  }
+  return rows;
 }
 
 function asBasis(value: unknown): PositionBasis {
@@ -1951,6 +1996,27 @@ export async function getBacktest(
       ...options,
     })
   );
+}
+
+/**
+ * The most recent published draws, newest first.
+ *
+ * Used by the insights heatmap and by the performance screen's walk-forward signals:
+ * both need the ledger itself, not a model's summary of it. The endpoint caps `limit`
+ * at 100, so that is the widest window one request can ask for; a caller that needs
+ * more history has to page by date, which the endpoint does not offer yet.
+ *
+ * @param limit How many of the most recent draws to return (1-100).
+ * @param lotteryType Which country's ledger to read. `thai` by default.
+ * @param options Per-request budgets, plus `onRetry` to announce a cold server.
+ */
+export async function getLatestDraws(
+  limit = 100,
+  lotteryType: LotteryType = 'thai',
+  options?: RequestOptions
+): Promise<LatestDrawRow[]> {
+  const params = new URLSearchParams({ limit: String(limit), type: lotteryType });
+  return parseLatestDraws(await request(`/api/latest-draws?${params.toString()}`, options));
 }
 
 /**
