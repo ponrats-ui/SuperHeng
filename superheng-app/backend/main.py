@@ -35,9 +35,14 @@ Endpoints
                           open a Stripe Checkout Session (card / PromptPay) for
                           the token's own account. Produces a payable URL; it
                           never charges and never grants.
+``POST /api/create-portal-session``
+                          open Stripe's self-service Billing Portal for the token's
+                          own account: cards, receipts, and cancellation. Never
+                          changes an entitlement by itself.
 ``POST /api/webhook/stripe`` (alias ``/api/webhook``)
                           Stripe's server-to-server events. Signature-verified,
-                          idempotent, and the only code path that grants premium.
+                          idempotent, and the only code path that grants *or
+                          revokes* premium.
 ``GET /api/diagnostics/paywall``
                           which paywall dependency is configured and which is
                           missing, by environment-variable name and never by value
@@ -1722,6 +1727,138 @@ async def create_checkout_session(
         session["charged"],
     )
     return session
+
+
+class PortalSessionRequest(BaseModel):
+    """Body of a portal request — one optional field, and no customer id.
+
+    There is deliberately **no** `customer_id` here. A caller-supplied customer id
+    would be a way to open somebody else's billing page: the id is resolved from the
+    token's own profile row, and the email on that row is the only fallback. The
+    model exists at all so `return_origin` is documented in the OpenAPI schema and
+    validated like the checkout one.
+    """
+
+    return_origin: str | None = Field(
+        None,
+        description=(
+            "Optional bare origin to send the customer back to when they leave the "
+            "portal, e.g. `https://superheng-3yf.pages.dev`. Validated against the "
+            "server's own allow-list — it is never used unchecked, because a "
+            "client-chosen redirect target is an open redirect."
+        ),
+    )
+
+
+@app.post(
+    "/api/create-portal-session",
+    tags=["checkout"],
+    summary="Open Stripe's Billing Portal for the caller's own account",
+    response_description=(
+        "A `status` of `created` with a `portal_url` to send the customer to. "
+        "Opening the portal changes nothing by itself — a cancellation or a refund "
+        "started there takes effect when Stripe tells the webhook about it."
+    ),
+)
+async def create_portal_session(
+    response: Response,
+    body: PortalSessionRequest | None = None,
+    user: auth.AuthenticatedUser = Depends(require_user),
+) -> dict[str, Any]:
+    """Open a self-service Billing Portal session for the caller.
+
+    This is the only place a customer can cancel, change a card, or download a
+    receipt without an operator, and it exists for the same reason the entitlement
+    does not: **nothing here is authoritative**. The portal is Stripe's page, and a
+    cancellation or refund becomes real when Stripe delivers
+    `customer.subscription.deleted` or `charge.refunded` to `/api/webhook` — which
+    revokes the tier through the one database function that writes it. So this
+    endpoint only mints a URL, and needs no lock, no ledger row, and no idempotency
+    key: opening the portal twice is two windows on the same billing page.
+
+    The Customer is resolved in two steps, most certain first:
+
+    1. `stripe_customer_id` from the caller's own profile row — the id recorded at
+       checkout, read with the caller's own token in `require_user`.
+    2. A live lookup by the caller's own email in Stripe, for an account with an
+       entitlement but no recorded Customer: a manually granted premium, or a
+       profile written before the column existed. Without this they would be told
+       they have no billing to manage while Stripe is holding their receipt.
+
+    A caller *supplying* a customer id is not an option. It is not a parameter on
+    the request model, so there is no code path where one account opens another's
+    billing page.
+    """
+    response.headers["Cache-Control"] = "private, no-store"
+
+    return_origin = resolve_return_origin(body.return_origin if body else None)
+
+    customer_id = user.stripe_customer_id
+    if customer_id is None:
+        try:
+            customer_id = payments.find_customer_id_by_email(user.email)
+        except payments.PaymentError as exc:
+            log.error(
+                "create-portal-session: customer lookup failed for user=%s status=%s detail=%s",
+                user.user_id,
+                exc.status_code,
+                exc.detail,
+            )
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    if customer_id is None:
+        # Not an error in the caller's browser: an account can legitimately hold a
+        # manually granted entitlement and have no Stripe customer at all. 404 says
+        # "there is no billing here", which is the truth and what a support
+        # conversation needs to read.
+        log.info(
+            "create-portal-session: no Stripe customer for user=%s (tier=%s)",
+            user.user_id,
+            user.tier,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "This account has no Stripe customer recorded and none could be "
+                "found for its email, so there is no billing to manage. Access "
+                "issued by hand cannot be cancelled here — contact support."
+            ),
+        )
+
+    try:
+        portal = payments.create_portal_session(
+            customer_id=customer_id,
+            # `/premium` again, built from the validated origin: the customer comes
+            # back to the page that shows what their cancellation did, not to a
+            # generic Stripe receipt.
+            return_url=return_origin.rstrip("/") + checkout.SUCCESS_PATH,
+        )
+    except payments.PaymentError as exc:
+        log.error(
+            "create-portal-session failed: user=%s status=%s detail=%s",
+            user.user_id,
+            exc.status_code,
+            exc.detail,
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    log.info(
+        "create-portal-session: user=%s customer=%s provider=%s",
+        user.user_id,
+        # The customer id is not a secret, but it is also not something to spray
+        # into logs in full; the last four characters identify it in a Stripe search.
+        f"...{customer_id[-4:]}",
+        payments.PROVIDER,
+    )
+    return {
+        # Named from `PROVIDER`, not from `provider_name()`: the latter is None
+        # unless the *webhook* secret is set too, and a successful portal call in a
+        # build whose webhook is unconfigured would then report `provider: null`
+        # beside a real URL. Opening the portal needs the API key and nothing else.
+        "status": "created",
+        "provider": payments.PROVIDER,
+        "portal_url": portal.url,
+    }
 
 
 # ---------------------------------------------------------------------------

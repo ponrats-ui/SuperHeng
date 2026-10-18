@@ -501,6 +501,15 @@ def create_session(
         "mode": "payment",
         "client_reference_id": user_id,
         "metadata": dict(client_reference_metadata),
+        # The same facts, carried onto the PaymentIntent as well as the Session.
+        #
+        # Stripe does not copy a Session's metadata onto its PaymentIntent, and a
+        # `charge.refunded` event carries the charge and nothing else — no session,
+        # no client_reference_id. This is what makes a refund attributable to an
+        # account without a lookup, and the Customer fallback in
+        # `apply_payment_event` covers the payments taken before this line existed.
+        # `user_id` is ours from the token, never the request's.
+        "payment_intent_data": {"metadata": {"user_id": user_id, **client_reference_metadata}},
         "line_items": [
             {
                 "quantity": 1,
@@ -607,6 +616,159 @@ def create_session(
 
 
 # ---------------------------------------------------------------------------
+# The Billing Portal — letting a customer manage what they already bought
+# ---------------------------------------------------------------------------
+# Where this sits, and why it matters: opening a portal grants nothing and changes
+# nothing. It returns a URL at Stripe, and whatever the customer does there —
+# updates a card, requests a refund, cancels a subscription — comes back as a
+# webhook, where the entitlement rules live. That separation is why this belongs in
+# `payments.py` at all: this module holds the credential, never the authority.
+@dataclass(frozen=True)
+class GatewayPortal:
+    """What Stripe returns for a Billing Portal session.
+
+    One field, because one field is what a caller can use: the url is the only thing
+    handed to the browser, and there is no id to reconcile afterwards — nothing
+    about an entitlement changes because somebody opened the portal.
+    """
+
+    url: str
+
+
+def _gateway_failure(exc: Any, *, operation: str) -> PaymentError:
+    """Map an SDK exception onto the error this API reports, naming the operation.
+
+    Shared by the portal calls, and deliberately *not* by `create_session`: its
+    refusals carry advice specific to a checkout (`promptpay`, 
+    `payment_method_types`) that would be noise in a message about a billing page.
+    Returning the error rather than raising it keeps each call site to `raise ...
+    from exc`, so the traceback still points at the line that tried.
+    """
+    stripe = _sdk()
+    if isinstance(exc, stripe.AuthenticationError):
+        # Not echoing Stripe's text: it can quote part of the key.
+        log.error("Stripe refused the API key (%s): %s", type(exc).__name__, exc)
+        return GatewayUnavailable(
+            f"Stripe refused the API key in {SECRET_KEY_ENV}. Check that the key is "
+            "correct, is not a publishable key, and belongs to the account you expect."
+        )
+    if isinstance(exc, stripe.APIConnectionError):
+        log.warning("Stripe could not be reached for %s: %s", operation, exc)
+        return GatewayUnavailable(
+            f"Could not reach Stripe to {operation}. Nothing was changed — try again."
+        )
+    if isinstance(exc, stripe.RateLimitError):
+        log.warning("Stripe rate-limited %s: %s", operation, exc)
+        return GatewayUnavailable(
+            f"Stripe is rate-limiting this account, so it could not {operation}. "
+            "Try again shortly."
+        )
+    if isinstance(exc, stripe.InvalidRequestError):
+        message = str(exc)
+        log.error("Stripe rejected the parameters for %s: %s", operation, message)
+        return GatewayRejected(
+            f"Stripe refused the request to {operation}: " + _portal_advice(message)
+        )
+    log.exception("Stripe failed while trying to %s.", operation)
+    return GatewayUnavailable(
+        f"Stripe failed while trying to {operation} ({type(exc).__name__}). "
+        "Nothing was changed — try again."
+    )
+
+
+def _portal_advice(message: str) -> str:
+    """Add the fix to the one refusal an operator will actually meet.
+
+    A portal that has never been configured answers with a message about a missing
+    *configuration* — or, in the wording live mode actually produces, about the
+    portal not being *activated* — which reads as an API problem and is in fact a
+    dashboard setting. And one that is easy to believe is done, because Stripe keeps
+    test and live mode separate: a portal that works in test mode answers 502 in
+    live mode until it is configured there too.
+
+    Both wordings are matched, because Stripe has shipped both; matching one and
+    missing the other would leave the operator with the message that needs the help
+    most and none of the help.
+    """
+    lowered = message.lower()
+    if "configuration" in lowered or "activat" in lowered:
+        return (
+            message + " The Billing Portal is configured per mode in Stripe → Settings "
+            "→ Billing → Customer portal (live and test separately), and each feature — "
+            "invoices, payment methods, cancellation — is switched on there."
+        )
+    return message
+
+
+def create_portal_session(*, customer_id: str, return_url: str) -> GatewayPortal:
+    """Open a self-service Billing Portal session for ``customer_id``.
+
+    ``customer_id`` is required and is never taken from the request. An account with
+    no Customer yet has nothing to manage, and honouring a customer id a caller
+    supplied would be a way to open *somebody else's* billing page — so the route
+    resolves it from the caller's own profile row and refuses when there is none.
+
+    ``return_url`` is built by the route from the same allow-listed origin the
+    checkout return uses, for the same reason: a client-supplied redirect target is
+    an open redirect, and this one lands on a page about the customer's billing.
+    """
+    if not customer_id:
+        raise GatewayRejected(
+            "No Stripe customer is recorded for this account, so there is no billing "
+            "to manage yet."
+        )
+
+    params: dict[str, Any] = {"customer": customer_id, "return_url": return_url}
+
+    stripe = _sdk()
+    try:
+        session = _client().v1.billing_portal.sessions.create(params)
+    except stripe.StripeError as exc:
+        raise _gateway_failure(exc, operation="open the billing portal") from exc
+
+    url = getattr(session, "url", None)
+    if not url:
+        # A portal session with no URL is not usable and there is nothing for the
+        # client to fall back to, so it is reported rather than passed on.
+        log.error("Stripe returned a portal session without a url: %r", session)
+        raise GatewayUnavailable(
+            "Stripe opened a billing portal session but returned no URL."
+        )
+
+    return GatewayPortal(url=str(url))
+
+
+def find_customer_id_by_email(email: str | None) -> str | None:
+    """The Stripe Customer billing ``email``, or None when there is none.
+
+    The fallback for an account that holds an entitlement but has no recorded
+    Customer: a manually granted premium, or a profile written before
+    `stripe_customer_id` existed. Without it those accounts are told they have no
+    billing to manage while Stripe is holding their receipts.
+
+    A list with a limit of one rather than a search: this is an exact lookup on an
+    indexed field, and the search API would accept a query string this code has no
+    use for. Only reached when the profile has no customer id, so the ordinary path
+    never pays for it.
+    """
+    if not email:
+        return None
+
+    stripe = _sdk()
+    try:
+        customers = _client().v1.customers.list({"email": email, "limit": 1})
+    except stripe.StripeError as exc:
+        raise _gateway_failure(exc, operation="look up the billing customer") from exc
+
+    records = getattr(customers, "data", None) or []
+    if not records:
+        return None
+    # A Customer object carries its `id`, which is all `_expandable_id` needs — the
+    # same reader the webhook uses for the same field.
+    return _expandable_id(records[0])
+
+
+# ---------------------------------------------------------------------------
 # The webhook
 # ---------------------------------------------------------------------------
 def verify_event(payload: bytes, signature: str | None) -> Any:
@@ -645,6 +807,30 @@ def verify_event(payload: bytes, signature: str | None) -> Any:
         raise MalformedEvent("The webhook body was not valid JSON.") from exc
 
 
+#: The events that take an entitlement away rather than giving one.
+#:
+#: Neither is reachable while the product is a one-time purchase: a `mode=payment`
+#: checkout creates no Subscription, so `customer.subscription.deleted` cannot fire
+#: today and is handled for the day the plan moves to recurring. `charge.refunded`
+#: very much can, and is the only revocation signal that exists for a 30-day pass.
+#:
+#: Both are attribution-poor: a refund carries a charge and a customer, a cancelled
+#: subscription carries a customer, and neither carries a user id at all. See
+#: `facts_from_event` and `apply_payment_event` for how the account is resolved from
+#: the Customer instead.
+REVOKING_EVENTS: frozenset[str] = frozenset(
+    {
+        "charge.refunded",
+        "customer.subscription.deleted",
+    }
+)
+
+#: Named so the facts reader can dispatch on the event type without repeating the
+#: string literal in three places.
+CHARGE_REFUNDED = "charge.refunded"
+SUBSCRIPTION_DELETED = "customer.subscription.deleted"
+
+
 #: The events this application acts on.
 #:
 #: `checkout.session.completed` is the documented signal that the customer
@@ -661,6 +847,7 @@ HANDLED_EVENTS: frozenset[str] = frozenset(
         "checkout.session.async_payment_failed",
         "checkout.session.expired",
     }
+    | set(REVOKING_EVENTS)
 )
 
 #: Events whose arrival can mean a payment is ready to grant. The other handled
@@ -694,8 +881,8 @@ def _read(obj: Any, name: str, default: Any = None) -> Any:
     return default if value is None else value
 
 
-def checkout_session(event: Any) -> Any:
-    """The Checkout Session an event carries, or None.
+def event_object(event: Any) -> Any:
+    """The object an event is about: a Checkout Session, a Charge, a Subscription.
 
     Returned as the SDK object rather than converted to a dict. That is not
     laziness: `to_dict_recursive` — the documented-looking way to do it — **does
@@ -703,6 +890,10 @@ def checkout_session(event: Any) -> Any:
     stripe-python 16.0.0. Relying on a converter would mean relying on an API that
     has already moved once, for a function that only ever reads a handful of named
     fields. `_read` gets them from either shape instead.
+
+    The shape is *not* uniform across event types, which is the whole reason
+    `facts_from_event` dispatches rather than reading one set of fields: a
+    `charge.refunded` carries a Charge, and a Charge has no `client_reference_id`.
     """
     return _read(_read(event, "data"), "object")
 
@@ -766,6 +957,15 @@ class PaymentFacts:
     #: Whether this event type is one that can grant, as opposed to one that only
     #: records. Both must hold before an entitlement is written.
     grantable: bool
+    #: Stripe's own verdict that the charge behind this event was refunded **in
+    #: full**. `charge.refunded` fires for a partial refund too, and that difference
+    #: decides whether a month of access is taken away — so it is read here as a fact
+    #: and decided in `webhook.py`. None means the event is not about a charge at
+    #: all, which must read as "not a refund" and never as "refunded".
+    refunded_in_full: bool | None = None
+    #: How much of the charge was refunded, in minor units. Recorded for the ledger
+    #: and for whoever reconciles it later; not a decision.
+    amount_refunded_minor: int | None = None
 
 
 def _text(value: Any) -> str | None:
@@ -773,6 +973,15 @@ def _text(value: Any) -> str | None:
     a number that arrived where a string was expected is a schema surprise, not a
     string to be invented."""
     return value if isinstance(value, str) and value else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    """The value if it is a real integer, else None.
+
+    `isinstance(x, bool)` is excluded explicitly: in Python `True` is an int, and an
+    amount that read `True` would be a nonsense value wearing a plausible type.
+    """
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def facts_from_event(event: Any) -> PaymentFacts:
@@ -783,10 +992,25 @@ def facts_from_event(event: Any) -> PaymentFacts:
     into an entitlement — and an absent field must read as absent, because the one
     thing this must never do is supply a default that looks like real data. The
     period an event grants is not read here at all: it comes from the catalogue.
+
+    It dispatches on the event type because Stripe's events are not one shape. The
+    `checkout.*` family carries a Session; a refund carries a Charge; a subscription
+    event carries the Subscription. Reading a Charge with the Session reader would
+    not fail — every field would simply read as absent — and the consequence of that
+    silence is a refund that is verified, recorded, and attributed to nobody.
     """
     event_id = _text(_read(event, "id")) or ""
     event_type = _text(_read(event, "type")) or ""
-    session = checkout_session(event)
+
+    if event_type == CHARGE_REFUNDED:
+        return _refund_facts(event_id, event_type, event_object(event))
+    if event_type == SUBSCRIPTION_DELETED:
+        return _subscription_facts(event_id, event_type, event_object(event))
+    return _session_facts(event_id, event_type, event_object(event))
+
+
+def _session_facts(event_id: str, event_type: str, session: Any) -> PaymentFacts:
+    """The `checkout.*` family: one Session, which is where the user id lives."""
     metadata = _read(session, "metadata")
 
     # `client_reference_id` first because it is the field built for this and the
@@ -803,15 +1027,80 @@ def facts_from_event(event: Any) -> PaymentFacts:
         user_id=_uuid_shaped(_read(session, "client_reference_id"))
         or _uuid_shaped(_read(metadata, "user_id")),
         plan_id=_text(_read(metadata, "plan_id")),
-        # `isinstance(x, bool)` excluded explicitly: in Python `True` is an int,
-        # and an amount that read `True` would be a nonsense value wearing a
-        # plausible type.
-        amount_minor=amount
-        if isinstance(amount, int) and not isinstance(amount, bool)
-        else None,
+        amount_minor=_int_or_none(amount),
         currency=_text(_read(session, "currency")),
         live_mode=live_mode if isinstance(live_mode, bool) else None,
         payment_status=_text(_read(session, "payment_status")),
         stripe_customer_id=_expandable_id(_read(session, "customer")),
         grantable=event_type in GRANTING_EVENTS,
+    )
+
+
+def _refund_facts(event_id: str, event_type: str, charge: Any) -> PaymentFacts:
+    """A `charge.refunded` event, which carries a Charge and no session.
+
+    Two identities are read, in the order `apply_payment_event` prefers them:
+
+    * `metadata.user_id`, which this application attached to the *PaymentIntent* at
+      checkout — Stripe copies an intent's metadata onto the charge it produces.
+    * `customer`, which the function resolves to an account by itself. This is what
+      makes a refund of a payment taken before that metadata existed still
+      attributable, and it is the only identity a charge created by anything else
+      would have.
+
+    `amount_refunded` and `refunded` are read as *facts*: Stripe sets `refunded`
+    only when the whole charge has been given back, and a partial refund is a
+    different situation that `webhook.py` decides about.
+    """
+    metadata = _read(charge, "metadata")
+
+    return PaymentFacts(
+        event_id=event_id,
+        event_type=event_type,
+        # No session on a charge. Recording the charge id here would look like a
+        # session id to every later reader of the ledger, which is worse than NULL.
+        session_id=None,
+        user_id=_uuid_shaped(_read(metadata, "user_id")),
+        plan_id=_text(_read(metadata, "plan_id")),
+        amount_minor=_int_or_none(_read(charge, "amount")),
+        currency=_text(_read(charge, "currency")),
+        live_mode=_read(charge, "livemode")
+        if isinstance(_read(charge, "livemode"), bool)
+        else None,
+        # A charge has no payment_status; whether the money moved is not in
+        # question when it is being given back.
+        payment_status=None,
+        stripe_customer_id=_expandable_id(_read(charge, "customer")),
+        grantable=False,
+        refunded_in_full=_read(charge, "refunded")
+        if isinstance(_read(charge, "refunded"), bool)
+        else None,
+        amount_refunded_minor=_int_or_none(_read(charge, "amount_refunded")),
+    )
+
+
+def _subscription_facts(event_id: str, event_type: str, subscription: Any) -> PaymentFacts:
+    """A `customer.subscription.deleted` event: the subscription is over.
+
+    Nothing is read about periods. A subscription's own timestamps describe Stripe's
+    billing cycle, not this product's entitlement — which is granted from the
+    *payment* and reads the period from the catalogue — so the only thing this event
+    can mean here is that access stops.
+    """
+    metadata = _read(subscription, "metadata")
+
+    return PaymentFacts(
+        event_id=event_id,
+        event_type=event_type,
+        session_id=None,
+        user_id=_uuid_shaped(_read(metadata, "user_id")),
+        plan_id=_text(_read(metadata, "plan_id")),
+        amount_minor=None,
+        currency=_text(_read(subscription, "currency")),
+        live_mode=_read(subscription, "livemode")
+        if isinstance(_read(subscription, "livemode"), bool)
+        else None,
+        payment_status=None,
+        stripe_customer_id=_expandable_id(_read(subscription, "customer")),
+        grantable=False,
     )

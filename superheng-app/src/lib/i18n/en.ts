@@ -246,6 +246,20 @@ export const en = {
     'Stripe created a payment page but this device would not open it. Nothing was ' +
     'charged \u2014 if a popup blocker is on, allow this site and try again.',
   'premium.alreadyPremium': 'This account already has an active Premium subscription.',
+  'premium.manageSubscription': 'Manage subscription',
+  'premium.manageSubscriptionHint':
+    'Opens Stripe\u2019s billing page, where the card can be changed and the ' +
+    'subscription cancelled.',
+  'premium.portalOpening': 'Opening Stripe\u2019s billing page\u2026',
+  'premium.portalRedirectFailed':
+    'Stripe opened a billing page but this device would not open it. Nothing was ' +
+    'changed \u2014 if a popup blocker is on, allow this site and try again.',
+  'premium.portalFailed':
+    'The billing page could not be opened just now, and nothing about your ' +
+    'subscription was changed. Please try again.',
+  'premium.noBilling':
+    'This account has no Stripe billing to manage \u2014 access was granted by hand, ' +
+    'so it cannot be cancelled from here.',
   'premium.accountUnreadable':
     'Signed in, but the subscription could not be checked just now. This is a service ' +
     'problem, not a verdict about your account.',

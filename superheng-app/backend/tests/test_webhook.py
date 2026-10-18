@@ -143,6 +143,11 @@ def db(monkeypatch: pytest.MonkeyPatch) -> dict:
     why the schema file is cross-checked from here (the function's name, its
     parameters and its grants are all asserted against `schema_profiles.sql`).
 
+    It also models the action: a body carrying `p_action: 'revoke'` is answered with
+    `revoked` regardless of period, because the function takes access away *before*
+    it ever looks at `p_period_days`. Keying only on the period would have made every
+    revocation test pass by recording instead of revoking.
+
     Set `state["override"]` to force a specific answer, or to an exception to make
     the call fail.
     """
@@ -158,6 +163,22 @@ def db(monkeypatch: pytest.MonkeyPatch) -> dict:
             if isinstance(response, Exception):
                 raise response
             return response
+        if body.get("p_action") == webhook.REVOKE:
+            # Nothing names an account: the function has no row to update and says
+            # so, leaving the ledger row recorded. Modelled here so the "a refund of
+            # an unknown customer" test asserts a real outcome rather than a fake one.
+            if body.get("p_user_id") is None and body.get("p_stripe_customer_id") is None:
+                return FakeResponse(200, {"result": webhook.UNKNOWN_USER, "user_id": None})
+            return FakeResponse(
+                200,
+                {
+                    "result": webhook.REVOKED,
+                    "event_id": body.get("p_event_id"),
+                    "user_id": body.get("p_user_id") or USER_ID,
+                    "tier": "free",
+                    "expiry": None,
+                },
+            )
         if body.get("p_period_days") is None:
             # Mirrors `if p_period_days is null then ... 'recorded'` in the SQL.
             return FakeResponse(200, {"result": webhook.RECORDED, "event_id": body.get("p_event_id")})
@@ -436,15 +457,23 @@ def test_every_parameter_the_function_declares_is_sent(db):
     declared = schema[start : schema.index(")", start)]
     for name in ("p_event_id", "p_event_type", "p_user_id", "p_session_id", "p_plan_id",
                  "p_period_days", "p_amount_minor", "p_currency", "p_livemode", "p_note",
-                 "p_stripe_customer_id"):
+                 "p_stripe_customer_id", "p_action"):
         assert name in declared, f"{name} is not a parameter of the schema function"
 
     deliver()
     assert set(sent(db)) == {
         "p_event_id", "p_event_type", "p_user_id", "p_session_id", "p_plan_id",
         "p_period_days", "p_amount_minor", "p_currency", "p_livemode", "p_note",
-        "p_stripe_customer_id",
+        "p_stripe_customer_id", "p_action",
     }
+
+
+def test_the_action_values_are_the_ones_the_schema_accepts(db):
+    """The function refuses an unknown `p_action` outright, so a renamed constant on
+    this side would turn every revocation into a 400 the customer never sees."""
+    schema = SCHEMA_FILE.read_text(encoding="utf-8")
+
+    assert f"in ('{webhook.GRANT}', '{webhook.REVOKE}')" in schema
 
 
 def test_the_customer_the_session_was_billed_to_reaches_the_grant(db):
@@ -577,3 +606,161 @@ def test_an_empty_answer_is_not_read_as_a_grant(db):
 # that the two sides agree — a rename or a missing parameter would silently stop
 # every grant, and the only symptom would be customers who paid and got nothing.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Taking an entitlement away — refunds and cancellations
+#
+# The asymmetry these tests exist for: a grant that is missed costs a customer
+# money, and a revocation that is wrong costs the customer their month. So every
+# ambiguous input here resolves to "leave access alone", and only Stripe's own
+# unambiguous flags take it away.
+# ---------------------------------------------------------------------------
+def deliver_charge(**kwargs) -> dict:
+    payload = charge_event(**kwargs)
+    return webhook.handle(payload, sign(payload), base_url=BASE_URL, service_key=SERVICE_KEY)
+
+
+def charge_event(
+    *,
+    refunded: bool | None = True,
+    amount: int = 9900,
+    amount_refunded: int | None = None,
+    customer: str | None = "cus_test_abc123",
+    metadata: dict | None = None,
+    charge_id: str = "ch_test_0001",
+) -> bytes:
+    """A `charge.refunded` delivery carrying a Charge, which is not a Session.
+
+    `refunded` is the field that decides the whole question: Stripe sets it only
+    when the entire charge has been given back. `amount_refunded` is here because a
+    partial refund reaches the same event type and must not take a month away.
+    """
+    charge: dict = {
+        "id": charge_id,
+        "object": "charge",
+        "amount": amount,
+        "currency": "thb",
+        "livemode": False,
+        "metadata": metadata or {},
+    }
+    if customer is not None:
+        charge["customer"] = customer
+    if refunded is not None:
+        charge["refunded"] = refunded
+    if amount_refunded is not None:
+        charge["amount_refunded"] = amount_refunded
+
+    return json.dumps(
+        {
+            "id": "evt_refund_0001",
+            "object": "event",
+            "created": 1_760_000_000,
+            "type": "charge.refunded",
+            "livemode": False,
+            "data": {"object": charge},
+        }
+    ).encode()
+
+
+def cancelled_subscription(**kwargs) -> dict:
+    subscription: dict = {
+        "id": "sub_test_0001",
+        "object": "subscription",
+        "status": "canceled",
+        "customer": kwargs.get("customer", "cus_test_abc123"),
+        "metadata": kwargs.get("metadata") or {},
+        "livemode": False,
+    }
+    if subscription["customer"] is None:
+        del subscription["customer"]
+    payload = json.dumps(
+        {
+            "id": "evt_cancel_0001",
+            "object": "event",
+            "created": 1_760_000_000,
+            "type": "customer.subscription.deleted",
+            "livemode": False,
+            "data": {"object": subscription},
+        }
+    ).encode()
+    return webhook.handle(payload, sign(payload), base_url=BASE_URL, service_key=SERVICE_KEY)
+
+
+def test_a_full_refund_revokes_and_says_so(db):
+    """A refunded month is revoked. The action is a parameter rather than an
+    inference, so `p_period_days` is NULL here: a revocation is not a grant."""
+    result = deliver_charge()
+
+    body = sent(db)
+    assert body["p_action"] == webhook.REVOKE
+    assert body["p_period_days"] is None
+    assert result["result"] == webhook.REVOKED
+    assert result["subscription_revoked"] is True
+    assert result["subscription_granted"] is False
+
+
+def test_a_partial_refund_is_recorded_and_takes_nothing_away(db):
+    """Stripe fires `charge.refunded` for a goodwill refund of part of a price. That
+    is not a request to end somebody's month, so it is recorded with no period and
+    no action — the ledger keeps the fact, the customer keeps their access."""
+    result = deliver_charge(refunded=False, amount_refunded=1000)
+
+    body = sent(db)
+    assert body["p_action"] == webhook.GRANT
+    assert body["p_period_days"] is None
+    assert "partial refund" in body["p_note"]
+    assert result["result"] == webhook.RECORDED
+    assert result["subscription_revoked"] is False
+
+
+def test_a_refund_without_the_refunded_flag_does_not_take_access_away(db):
+    """An event shape this build does not recognise must fail towards keeping the
+    customer's access, not towards revoking it on a field that was absent."""
+    result = deliver_charge(refunded=None)
+
+    assert sent(db)["p_action"] == webhook.GRANT
+    assert result["subscription_revoked"] is False
+
+
+def test_a_cancelled_subscription_revokes(db):
+    result = cancelled_subscription()
+
+    body = sent(db)
+    assert body["p_action"] == webhook.REVOKE
+    assert body["p_user_id"] is None
+    # The Customer is the only identity a cancellation carries, and it is what the
+    # database function resolves the account through.
+    assert body["p_stripe_customer_id"] == "cus_test_abc123"
+    assert result["subscription_revoked"] is True
+
+
+def test_a_refund_of_an_unknown_customer_is_still_recorded(db):
+    """Nothing identifies the account. The event is verified and the ledger keeps
+    it — dropping it would lose money's audit trail — but nobody's access changes."""
+    result = deliver_charge(customer=None)
+
+    body = sent(db)
+    assert body["p_action"] == webhook.REVOKE
+    assert body["p_user_id"] is None
+    assert body["p_stripe_customer_id"] is None
+    assert result["result"] == webhook.UNKNOWN_USER
+    assert result["subscription_revoked"] is False
+    assert result["subscription_granted"] is False
+
+
+def test_a_refund_whose_charge_carries_the_intent_metadata_names_the_user(db):
+    """Checkout attaches the user id to the PaymentIntent, and Stripe copies intent
+    metadata onto the Charge it produces. That is the attribution that does not
+    depend on the profile's customer id still being right."""
+    deliver_charge(metadata={"user_id": USER_ID})
+
+    assert sent(db)["p_user_id"] == USER_ID
+
+
+def test_a_grant_still_says_grant(db):
+    """The parameter is sent on every call, so the function never has to infer intent
+    from the presence of a period."""
+    deliver()
+
+    assert sent(db)["p_action"] == webhook.GRANT

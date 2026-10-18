@@ -698,12 +698,23 @@ def test_the_granting_event_set_is_the_documented_one():
         "checkout.session.async_payment_succeeded",
         "checkout.session.async_payment_failed",
         "checkout.session.expired",
+        "charge.refunded",
+        "customer.subscription.deleted",
     }
     assert payments.GRANTING_EVENTS == {
         "checkout.session.completed",
         "checkout.session.async_payment_succeeded",
     }
+    assert payments.REVOKING_EVENTS == {
+        "charge.refunded",
+        "customer.subscription.deleted",
+    }
     assert payments.GRANTING_EVENTS <= payments.HANDLED_EVENTS
+    assert payments.REVOKING_EVENTS <= payments.HANDLED_EVENTS
+    # Disjoint sets, so no single event can both grant and revoke: the webhook
+    # dispatches on membership, and an event in both would take the first branch
+    # and silently ignore the other meaning.
+    assert not (payments.GRANTING_EVENTS & payments.REVOKING_EVENTS)
 
 
 # ---------------------------------------------------------------------------

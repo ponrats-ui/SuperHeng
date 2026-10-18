@@ -835,6 +835,24 @@ export type CheckoutSession = {
 };
 
 /**
+ * The answer to `POST /api/create-portal-session`.
+ *
+ * One field is load-bearing: `portal_url`, where the account's own Stripe billing
+ * page lives. It is null only when the server had nothing to hand back, which is
+ * normalised from an empty string so a caller tests one thing.
+ *
+ * There is deliberately no entitlement in this shape. Opening the portal changes
+ * nothing — a cancellation or a refund becomes real when Stripe tells the webhook,
+ * and the next `GET /api/me` is where that shows up. A response claiming otherwise
+ * would be a second place that decides who is premium.
+ */
+export type PortalSession = {
+  status: string;
+  provider: string | null;
+  portal_url: string | null;
+};
+
+/**
  * The answer to `GET /api/diagnostics/paywall` — what the *server* is missing.
  *
  * `status` is the field to branch on, and there are three values rather than two
@@ -1824,6 +1842,26 @@ export function parseAccount(body: unknown): AccountStatus {
 }
 
 /**
+ * Validates the `/api/create-portal-session` payload.
+ *
+ * Only the URL is required to be a string, and an empty one becomes null. A body
+ * that is not an object is refused rather than read as "no portal" — a proxy's HTML
+ * error page must not reach the UI as a state it can explain.
+ */
+export function parsePortalSession(body: unknown): PortalSession {
+  const root = asRecord(body);
+  if (!root) {
+    throw new ApiError('malformed', 'The billing service returned a non-object body.');
+  }
+
+  return {
+    status: asString(root.status),
+    provider: typeof root.provider === 'string' ? root.provider : null,
+    portal_url: typeof root.portal_url === 'string' && root.portal_url ? root.portal_url : null,
+  };
+}
+
+/**
  * Validates the `/api/checkout/create-session` payload.
  *
  * Strict in the one place that matters. A status is required, and the two flags
@@ -2343,6 +2381,37 @@ export async function createCheckoutSession(
         idempotency_key: newIdempotencyKey(),
         ...(returnOrigin ? { return_origin: returnOrigin } : {}),
       },
+    })
+  );
+}
+
+/**
+ * Ask the server to open Stripe's Billing Portal for this account.
+ *
+ * The customer is resolved on the server from the token's own profile — there is no
+ * customer-id parameter to send, by design, so this cannot become a way to open
+ * somebody else's billing page. Cancelling there revokes access through the webhook,
+ * not through this call.
+ *
+ * A 404 is a real state, not an outage: an account whose access was granted by hand
+ * has no Stripe subscription to manage. It arrives as an `ApiError` with
+ * `status === 404` so the screen can say so instead of showing a generic failure.
+ *
+ * `options.returnOrigin` works exactly as it does for checkout: a request the server
+ * validates, omitted on native where there is no origin.
+ */
+export async function createPortalSession(
+  accessToken: string,
+  options?: RequestOptions & { returnOrigin?: string }
+): Promise<PortalSession> {
+  const { returnOrigin, ...rest } = options ?? {};
+
+  return parsePortalSession(
+    await request('/api/create-portal-session', {
+      ...rest,
+      accessToken,
+      method: 'POST',
+      body: returnOrigin ? { return_origin: returnOrigin } : {},
     })
   );
 }

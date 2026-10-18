@@ -48,6 +48,32 @@ WHAT THIS MODULE TRUSTS
   hand-edited session in the dashboard) cannot choose how long it grants for. The
   database refuses to update a profile that does not exist, so an event naming a
   deleted account cannot create one.
+
+  One more identity is trusted, for the events that carry nothing else: the Stripe
+  `customer` an event is billed to, resolved to an account by the database function
+  through the unique `user_profiles.stripe_customer_id` index. A refund and a
+  subscription cancellation have no `client_reference_id` at all, so without it a
+  refund would be verified, recorded, and applied to nobody.
+
+WHAT THIS MODULE TAKES AWAY, AND WHY THAT IS A POLICY
+  `payments.REVOKING_EVENTS` are the events that can end an entitlement, and the
+  decision of whether one *should* is made here rather than in the schema:
+
+  * `customer.subscription.deleted` always revokes. The subscription is over. (It
+    cannot arrive while the catalogue sells a one-time 30-day pass, since a
+    `mode=payment` checkout creates no subscription; it is handled so that moving to
+    a recurring plan does not silently keep granting access to people who cancelled.)
+  * `charge.refunded` revokes only when the charge was refunded **in full**. Stripe
+    fires that event for a partial refund too, and giving somebody a few baht back is
+    not a request to end their month. A partial refund is recorded in the ledger and
+    changes nothing.
+
+  Revoking is immediate and total — the tier goes to `free` and the expiry is
+  cleared — rather than "until the period ends". That is the founder's decision, and
+  it is recorded here because the honest alternative is a product choice, not a bug:
+  a customer who was refunded may still have been using the service they were
+  refunded for. Anything subtler (let the period run out, revoke at the next month)
+  belongs in `apply_payment_event`, where the period arithmetic already lives.
 """
 
 from __future__ import annotations
@@ -71,13 +97,20 @@ APPLY_FUNCTION = "apply_payment_event"
 #: A failure here is recoverable — Stripe will deliver the event again.
 RPC_TIMEOUT_SECONDS = 10.0
 
+#: The two things `apply_payment_event` can be asked to do, matching `p_action` in
+#: `schema_profiles.sql`. Named here rather than inlined so the schema cross-check in
+#: `tests/test_webhook.py` can assert the two agree.
+GRANT = "grant"
+REVOKE = "revoke"
+
 #: The results `apply_payment_event` can return, as a set so an unexpected value
 #: can be recognised rather than silently treated as success.
 APPLIED = "applied"
+REVOKED = "revoked"
 DUPLICATE = "duplicate"
 UNKNOWN_USER = "unknown_user"
 RECORDED = "recorded"
-KNOWN_RESULTS = frozenset({APPLIED, DUPLICATE, UNKNOWN_USER, RECORDED})
+KNOWN_RESULTS = frozenset({APPLIED, REVOKED, DUPLICATE, UNKNOWN_USER, RECORDED})
 
 #: The event types that mean "the payment failed or lapsed". Recorded so the
 #: ledger shows what happened, and never granted.
@@ -135,6 +168,7 @@ def apply_payment(
     live_mode: bool | None,
     stripe_customer_id: str | None,
     note: str,
+    action: str = GRANT,
 ) -> dict[str, Any]:
     """Record the event and, when `period_days` is given, grant the entitlement.
 
@@ -171,6 +205,11 @@ def apply_payment(
         # means a future granting path does not have to remember to add it.
         "p_stripe_customer_id": stripe_customer_id,
         "p_note": note,
+        # Grant or revoke. Sent even when granting, so the function never has to
+        # infer intent from the presence of a period — "no period" already means
+        # "record this and grant nothing", and one parameter must not mean two
+        # things.
+        "p_action": action,
     }
 
     try:
@@ -236,6 +275,33 @@ def apply_payment(
     return payload
 
 
+def _revocation(facts: payments.PaymentFacts) -> tuple[str, str]:
+    """Whether an event that *can* revoke actually should, and the note explaining it.
+
+    Facts and policy are kept apart on purpose: `payments.facts_from_event` reports
+    what Stripe said, and the decision about a customer's access is made here, in the
+    module that owns entitlements.
+
+    An unrecognised shape — a refund event whose `refunded` flag is absent — is
+    treated as **not** a full refund. The ledger keeps the row either way, and the
+    ledger is not worth a customer's month: the opposite default would revoke access
+    over a field this code failed to read.
+    """
+    if facts.event_type == payments.SUBSCRIPTION_DELETED:
+        return REVOKE, "customer.subscription.deleted: subscription over, revoked"
+
+    if facts.refunded_in_full:
+        return REVOKE, "charge.refunded: refunded in full, revoked"
+
+    if facts.amount_refunded_minor:
+        return GRANT, (
+            f"charge.refunded: partial refund of {facts.amount_refunded_minor} minor "
+            "units, entitlement left alone"
+        )
+
+    return GRANT, "charge.refunded: not a full refund, entitlement left alone"
+
+
 def handle(
     raw_body: bytes,
     signature: str | None,
@@ -269,17 +335,25 @@ def handle(
             "event_type": facts.event_type,
             "result": None,
             "subscription_granted": False,
+            # Same shape as every other answer: a client reading one of these keys
+            # must not have to know which branch produced the body.
+            "subscription_revoked": False,
         }
 
     # --- Decide, before touching the database -----------------------------
     # The order matters: the cheapest and most certain refusals first, so the
-    # reason recorded in the ledger is the most specific true one.
+    # reason recorded in the ledger is the most specific true one. Revocation is
+    # checked before anything else, because those events are not grantable and must
+    # not reach the code that decides how long to grant for.
     period_days: int | None = None
+    action = GRANT
     note: str
     plan_id = facts.plan_id
     user_id = facts.user_id
 
-    if facts.event_type in NON_GRANTING_EVENTS:
+    if facts.event_type in payments.REVOKING_EVENTS:
+        action, note = _revocation(facts)
+    elif facts.event_type in NON_GRANTING_EVENTS:
         note = f"{facts.event_type}: no entitlement"
     elif not facts.grantable:
         note = f"{facts.event_type}: not a granting event"
@@ -289,19 +363,33 @@ def handle(
         # not grant. It is recorded so the ledger shows the session existed, and
         # `checkout.session.async_payment_succeeded` grants it later if it settles.
         note = f"payment_status={facts.payment_status!r}: recorded, not granted"
-    elif user_id is None:
-        note = "no usable user id in client_reference_id or metadata"
     else:
         plan = checkout.PLANS_BY_ID.get(plan_id or "")
         if plan is None:
             # A session this application did not create. Refused rather than
             # granted for some default period: if the plan is unknown then so is
             # what was bought, and granting 30 days to an unrecognised session is
-            # how a mis-set Payment Link becomes free subscriptions.
+            # how a mis-set Payment Link becomes free subscriptions. Checked before
+            # the identity below, because "we do not sell this" is the more useful
+            # of the two reasons when both are true.
             note = f"unknown plan {plan_id!r}: recorded, not granted"
+        elif user_id is None and facts.stripe_customer_id is None:
+            # Nothing on this event says which account it is about: no
+            # client_reference_id, no metadata user id, and no Customer to resolve
+            # one from. Refused rather than granted to nobody.
+            note = (
+                "no usable user id in client_reference_id or metadata, and no "
+                "customer to resolve one from"
+            )
         else:
             period_days = plan.period_days
             note = f"granted {plan.period_days}d for plan {plan.id}"
+            if user_id is None:
+                # The account is resolved from the Customer inside the database
+                # function, next to the write it qualifies, rather than by a second
+                # round trip here. Said out loud in the ledger because "which account
+                # did this grant?" is the first question anyone asks of a row.
+                note += " (account resolved from the Stripe customer)"
 
     payload = apply_payment(
         base_url=base_url,
@@ -317,15 +405,18 @@ def handle(
         live_mode=facts.live_mode,
         stripe_customer_id=facts.stripe_customer_id,
         note=note,
+        action=action,
     )
 
     result = payload.get("result")
     granted = result == APPLIED
+    revoked = result == REVOKED
 
     log.info(
-        "Stripe webhook: event=%s type=%s result=%s user=%s session=%s note=%s",
+        "Stripe webhook: event=%s type=%s action=%s result=%s user=%s session=%s note=%s",
         facts.event_id,
         facts.event_type,
+        action,
         result,
         user_id,
         facts.session_id,
@@ -338,7 +429,11 @@ def handle(
         "event_type": facts.event_type,
         "result": result,
         "subscription_granted": granted,
-        "user_id": user_id,
+        # Reported separately from "granted", because they are opposite outcomes and
+        # a client that read one flag for both would show a cancellation as a
+        # purchase.
+        "subscription_revoked": revoked,
+        "user_id": payload.get("user_id", user_id),
         "plan_id": plan_id,
         "period_days": period_days,
         # The expiry the database computed, present only when it granted. Read from

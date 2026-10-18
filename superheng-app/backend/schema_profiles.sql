@@ -401,6 +401,7 @@ create table if not exists public.payment_events (
     --   duplicate    already claimed; nothing was written this time
     --   unknown_user no profile row to update — the account was deleted
     --   recorded     deliberately granted nothing (unpaid, expired, unknown plan)
+    --   revoked      the entitlement was taken away (refund, cancellation)
     result        text        not null default 'pending',
 
     -- The sentence the handler decided on, e.g. 'payment_status=\'unpaid\':
@@ -413,7 +414,8 @@ create table if not exists public.payment_events (
     primary key (provider, id),
 
     constraint payment_events_known_result
-        check (result in ('pending', 'applied', 'duplicate', 'unknown_user', 'recorded')),
+        check (result in ('pending', 'applied', 'duplicate', 'unknown_user', 'recorded',
+                          'revoked')),
 
     -- A period outside this band is not a period this product sells. The bound
     -- exists because `period_days` reaches `make_interval` below: an absurd value
@@ -448,6 +450,18 @@ alter table public.payment_events
     add column if not exists note          text;
 alter table public.payment_events
     add column if not exists received_at   timestamptz not null default now();
+
+-- Revocation grows the allowed set, so the constraint has to grow with it. Dropped
+-- and re-added rather than left alone: a file that taught the function a new outcome
+-- without teaching the constraint would fail at the moment access was being taken
+-- away — a refund, with the ledger row already claimed — which is the worst moment
+-- to discover that this file has not been re-applied.
+alter table public.payment_events
+    drop constraint if exists payment_events_known_result;
+alter table public.payment_events
+    add constraint payment_events_known_result
+        check (result in ('pending', 'applied', 'duplicate', 'unknown_user', 'recorded',
+                          'revoked'));
 
 -- "Money came in for this account" is the query this table will actually be used
 -- for, so it gets an index rather than a sequential scan over every payment.
@@ -486,11 +500,17 @@ create index if not exists payment_events_user_received_idx
 -- shadowing `user_profiles` with an object of their own.
 -- `create or replace` cannot change a function's signature: it would add a new
 -- overload and leave the previous one live, still holding its `service_role`
--- grant. So the 10-argument form (without `p_stripe_customer_id`) is dropped
--- explicitly first. Its grants go with it, and the GRANT below re-establishes
--- them for the new signature only.
+-- grant. So the earlier forms are dropped explicitly first — the 10-argument one
+-- (without `p_stripe_customer_id`) and the 11-argument one (without `p_action`) —
+-- and their grants go with them. The GRANT below re-establishes them for the
+-- current signature only. Dropping a signature an older deployment still calls is
+-- safe here for the same reason everything else in this file is: a call that misses
+-- the function answers 404, which `webhook.py` maps to a 503, and Stripe retries.
 drop function if exists public.apply_payment_event(
     text, text, uuid, text, text, integer, bigint, text, boolean, text
+);
+drop function if exists public.apply_payment_event(
+    text, text, uuid, text, text, integer, bigint, text, boolean, text, text
 );
 
 create or replace function public.apply_payment_event(
@@ -504,10 +524,16 @@ create or replace function public.apply_payment_event(
     p_currency           text,
     p_livemode           boolean,
     p_note               text,
-    -- Defaulted so the existing 10-argument call sites and the verification
-    -- snippets below keep working unchanged, and so "no customer on this event"
-    -- is expressed by omitting it rather than by sending NULL.
-    p_stripe_customer_id text default null
+    -- Defaulted so the existing call sites and the verification snippets below keep
+    -- working unchanged, and so "no customer on this event" is expressed by omitting
+    -- it rather than by sending NULL.
+    p_stripe_customer_id text default null,
+    -- 'grant' extends the entitlement; 'revoke' takes it away. One function rather
+    -- than two because the two things it must guarantee are identical — claim the
+    -- event id, then write the entitlement, atomically — and every route to
+    -- `subscription_tier` should pass through the same claim or the reason this
+    -- function exists has been copied rather than shared.
+    p_action             text default 'grant'
 )
 returns jsonb
 language plpgsql
@@ -517,7 +543,39 @@ declare
     v_claimed integer;
     v_expiry  timestamptz;
     v_tier    text;
+    v_user_id uuid;
 begin
+    -- An unrecognised action is refused rather than treated as a grant, and it is
+    -- refused before anything is written: a caller and this function disagreeing
+    -- about what is being done is the one case where doing nothing is the only safe
+    -- reading.
+    if p_action not in ('grant', 'revoke') then
+        raise exception 'apply_payment_event: unknown p_action %', p_action
+            using errcode = 'invalid_parameter_value';
+    end if;
+
+    -- WHO THIS EVENT IS ABOUT, resolved before the claim so the ledger row records
+    -- the account it actually concerned rather than a NULL that means "unknown".
+    --
+    -- `p_user_id` when the event named one: that is `client_reference_id`, written
+    -- by this application at checkout. Otherwise the owner of the Customer the event
+    -- is billed to — and that is not a nicety, it is the only identity a
+    -- `charge.refunded` or a `customer.subscription.deleted` carries at all. Neither
+    -- has a `client_reference_id`, so a refund that could only be attributed by user
+    -- id would be verified, recorded, and then act on nobody.
+    --
+    -- Both ids come from Stripe and both are trustworthy for the same reason: the
+    -- signature over the body verified before this function was called. The lookup
+    -- goes through `user_profiles_stripe_customer_id_key`, a UNIQUE index, so it can
+    -- match at most one account; a customer matching none leaves `v_user_id` NULL and
+    -- the caller is told `unknown_user` rather than acting on a guess.
+    v_user_id := p_user_id;
+    if v_user_id is null and p_stripe_customer_id is not null then
+        select p.id into v_user_id
+          from public.user_profiles p
+         where p.stripe_customer_id = p_stripe_customer_id;
+    end if;
+
     -- 1. Claim the delivery. This INSERT is the idempotency check; the primary
     --    key is what makes it one, and `do nothing` turns a redelivery into a
     --    no-op rather than an error the caller would have to classify.
@@ -526,11 +584,16 @@ begin
         period_days, amount_minor, currency, livemode, result, note
     )
     values (
-        'stripe', p_event_id, p_event_type, p_user_id, p_session_id, p_plan_id,
+        'stripe', p_event_id, p_event_type, v_user_id, p_session_id, p_plan_id,
         p_period_days, p_amount_minor, p_currency, p_livemode,
-        -- A granting call lands in 'pending' so a row can never claim 'applied'
-        -- before the update that earns it has run.
-        case when p_period_days is null then 'recorded' else 'pending' end,
+        -- A call that may write an entitlement lands in 'pending', so a row can
+        -- never claim 'applied' before the update that earns it has run. A revoke is
+        -- pending for the same reason: the row exists, the write has not happened.
+        case
+            when p_action = 'revoke' then 'pending'
+            when p_period_days is null then 'recorded'
+            else 'pending'
+        end,
         p_note
     )
     on conflict (provider, id) do nothing;
@@ -541,12 +604,59 @@ begin
         return jsonb_build_object('result', 'duplicate', 'event_id', p_event_id);
     end if;
 
-    -- 2. Nothing to grant: the row IS the outcome.
+    -- 2. Revoke. Takes access away and stops there.
+    --
+    -- The tier is the whole entitlement: `auth.resolve_entitlement` reads it with
+    -- the expiry, so 'free' is not-premium whatever the date says. There is no
+    -- `is_premium` column to set — the API computes it — which is deliberate, because
+    -- a stored boolean would have to be kept in step with the expiry and would go
+    -- stale the day a period lapsed.
+    if p_action = 'revoke' then
+        update public.user_profiles
+           set subscription_tier     = 'free',
+               -- Cleared rather than left behind. A future expiry on a *free* row is
+               -- read by nothing but a human, and what it says to that human is
+               -- "still paid up" — ambiguity worth removing from a support
+               -- conversation about a refund.
+               subscription_expiry   = null,
+               subscription_provider = null
+               -- `stripe_customer_id` is deliberately NOT cleared: the Customer still
+               -- exists at Stripe, the account may buy again, and forgetting it would
+               -- mint a duplicate Customer on the next purchase.
+         where id = v_user_id
+        returning subscription_tier into v_tier;
+
+        if not found then
+            update public.payment_events
+               set result = 'unknown_user'
+             where provider = 'stripe' and id = p_event_id;
+
+            return jsonb_build_object(
+                'result', 'unknown_user',
+                'event_id', p_event_id,
+                'user_id', v_user_id
+            );
+        end if;
+
+        update public.payment_events
+           set result = 'revoked'
+         where provider = 'stripe' and id = p_event_id;
+
+        return jsonb_build_object(
+            'result', 'revoked',
+            'event_id', p_event_id,
+            'user_id', v_user_id,
+            'tier', v_tier,
+            'expiry', null
+        );
+    end if;
+
+    -- 3. Nothing to grant: the row IS the outcome.
     if p_period_days is null then
         return jsonb_build_object('result', 'recorded', 'event_id', p_event_id);
     end if;
 
-    -- 3. Grant.
+    -- 4. Grant.
     --
     -- The period is added to the LATER of now and the current expiry, so a
     -- renewal grants a full period on top of time already paid for instead of
@@ -571,7 +681,7 @@ begin
            -- create or reuse a customer would otherwise blank a good id and send
            -- the next purchase back to creating a duplicate Customer.
            stripe_customer_id    = coalesce(p_stripe_customer_id, stripe_customer_id)
-     where id = p_user_id
+     where id = v_user_id
     returning subscription_expiry, subscription_tier into v_expiry, v_tier;
 
     if not found then
@@ -585,7 +695,7 @@ begin
         return jsonb_build_object(
             'result', 'unknown_user',
             'event_id', p_event_id,
-            'user_id', p_user_id
+            'user_id', v_user_id
         );
     end if;
 
@@ -596,7 +706,7 @@ begin
     return jsonb_build_object(
         'result', 'applied',
         'event_id', p_event_id,
-        'user_id', p_user_id,
+        'user_id', v_user_id,
         'tier', v_tier,
         'expiry', v_expiry
     );
@@ -621,11 +731,11 @@ $$;
 -- — flipping the function to `security definer` to "fix" something — makes the
 -- escalation real. Verification query 6 below checks the fence, not the luck.
 revoke all on function public.apply_payment_event(
-    text, text, uuid, text, text, integer, bigint, text, boolean, text, text
+    text, text, uuid, text, text, integer, bigint, text, boolean, text, text, text
 ) from public, anon, authenticated;
 
 grant execute on function public.apply_payment_event(
-    text, text, uuid, text, text, integer, bigint, text, boolean, text, text
+    text, text, uuid, text, text, integer, bigint, text, boolean, text, text, text
 ) to service_role;
 
 -- The ledger is not readable or writable by a signed-in user, only by server-side
@@ -641,9 +751,9 @@ comment on column public.payment_events.user_id       is 'The credited account, 
 comment on column public.payment_events.period_days   is 'Days the entitlement was extended by; NULL means the event granted nothing (see result). Bounded by payment_events_sane_period.';
 comment on column public.payment_events.amount_minor  is 'Amount in the currency''s minor unit (9900 = ฿99.00). BIGINT, and an integer — never a float.';
 comment on column public.payment_events.livemode      is 'Whether the gateway was in live mode, so a test payment that reached production is recognisable afterwards.';
-comment on column public.payment_events.result        is 'applied | duplicate | unknown_user | recorded | pending. What this delivery actually did.';
+comment on column public.payment_events.result        is 'applied | revoked | duplicate | unknown_user | recorded | pending. What this delivery actually did.';
 comment on column public.payment_events.note          is 'Human-readable reason for the result, for whoever reconciles payments later.';
-comment on function public.apply_payment_event(text, text, uuid, text, text, integer, bigint, text, boolean, text, text) is 'The only code that writes subscription_tier. Claims the event id and extends the subscription in one transaction, so a retried webhook cannot grant twice. EXECUTE is revoked from PUBLIC/anon/authenticated and granted to service_role only.';
+comment on function public.apply_payment_event(text, text, uuid, text, text, integer, bigint, text, boolean, text, text, text) is 'The only code that writes subscription_tier, in either direction. Claims the event id, then grants (p_action grant) or revokes (p_action revoke) in one transaction, so a retried webhook can never act twice. Resolves the account from p_user_id, or from the Customer when the event carries no user id — a refund carries none. EXECUTE is revoked from PUBLIC/anon/authenticated and granted to service_role only.';
 
 comment on table  public.user_profiles is 'One row per authenticated user (1:1 with auth.users). Current subscription state only — the payment history lives in public.payment_events, which deliberately does not cascade so it survives a user deletion.';
 comment on column public.user_profiles.id                    is 'Same UUID as auth.users.id. Cascades on user delete; no default, because a generated id would describe a profile belonging to nobody.';
@@ -715,9 +825,9 @@ comment on column public.user_profiles.updated_at            is 'Last write time
 --    EXECUTE to PUBLIC on new functions, and PostgREST exposes every function in
 --    the served schema, so a missing REVOKE is a self-service upgrade endpoint:
 --
---   select has_function_privilege('anon',          'public.apply_payment_event(text, text, uuid, text, text, integer, bigint, text, boolean, text, text)', 'execute') as anon_can_call,
---          has_function_privilege('authenticated', 'public.apply_payment_event(text, text, uuid, text, text, integer, bigint, text, boolean, text, text)', 'execute') as auth_can_call,
---          has_function_privilege('service_role',  'public.apply_payment_event(text, text, uuid, text, text, integer, bigint, text, boolean, text, text)', 'execute') as service_can_call;
+--   select has_function_privilege('anon',          'public.apply_payment_event(text, text, uuid, text, text, integer, bigint, text, boolean, text, text, text)', 'execute') as anon_can_call,
+--          has_function_privilege('authenticated', 'public.apply_payment_event(text, text, uuid, text, text, integer, bigint, text, boolean, text, text, text)', 'execute') as auth_can_call,
+--          has_function_privilege('service_role',  'public.apply_payment_event(text, text, uuid, text, text, integer, bigint, text, boolean, text, text, text)', 'execute') as service_can_call;
 --   -- expect: false, false, true
 --
 --    And the same thing over HTTP, which is how it would actually be attacked.
@@ -757,3 +867,49 @@ comment on column public.user_profiles.updated_at            is 'Last write time
 --
 --   select count(*) from public.payment_events where user_id is null;
 --   -- expect this to be non-zero after deleting a user who had paid
+--
+-- 9. Revocation, proved rather than assumed. Run this in the SQL editor (which
+--    bypasses RLS) against your own account, after query 7 has left you premium.
+--    The first call must take access away; the second must be refused, which is the
+--    property that matters — a refund Stripe delivers twice must not act twice:
+--
+--   select public.apply_payment_event(
+--       'evt_verification_refund', 'charge.refunded',
+--       (select id from auth.users order by created_at limit 1),
+--       null, null, null, 9900, 'thb', false, 'verification: refund',
+--       null, 'revoke');
+--   -- expect {"result": "revoked", "tier": "free", "expiry": null}
+--
+--   select subscription_tier, subscription_expiry from public.user_profiles
+--    where id = (select id from auth.users order by created_at limit 1);
+--   -- expect free, NULL — and GET /api/me now reports is_premium false
+--
+--   select public.apply_payment_event(
+--       'evt_verification_refund', 'charge.refunded',
+--       (select id from auth.users order by created_at limit 1),
+--       null, null, null, 9900, 'thb', false, 'verification: replay',
+--       null, 'revoke');
+--   -- expect exactly {"result": "duplicate"} — the ledger already claimed the id
+--
+--   delete from public.payment_events where id = 'evt_verification_refund';
+--
+-- 10. The customer-only path, which is how a real refund actually arrives: a
+--     `charge.refunded` carries no user id at all, only a Customer. On an account
+--     that owns one, omitting the user id must still resolve the account — and an
+--     unknown Customer must resolve to nobody rather than to everybody:
+--
+--   select public.apply_payment_event(
+--       'evt_verification_customer', 'charge.refunded',
+--       null, null, null, null, 9900, 'thb', false, 'verification: by customer',
+--       (select stripe_customer_id from public.user_profiles
+--         where stripe_customer_id is not null limit 1), 'revoke');
+--   -- expect {"result": "revoked", "user_id": <the owning account>}
+--
+--   select public.apply_payment_event(
+--       'evt_verification_ghost', 'charge.refunded',
+--       null, null, null, null, 9900, 'thb', false, 'verification: unknown customer',
+--       'cus_does_not_exist', 'revoke');
+--   -- expect {"result": "unknown_user"} and no row changed
+--
+--   delete from public.payment_events
+--    where id in ('evt_verification_customer', 'evt_verification_ghost');

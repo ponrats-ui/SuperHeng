@@ -9,6 +9,7 @@ import { Radius, Spacing } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
 import {
   createCheckoutSession,
+  createPortalSession,
   getCheckoutPlans,
   getPaywallDiagnostics,
   isApiError,
@@ -281,6 +282,66 @@ export default function PremiumScreen() {
     }
   }
 
+  /**
+   * Open Stripe's Billing Portal, where a subscriber cancels, changes their card or
+   * downloads a receipt without emailing anyone.
+   *
+   * Deliberately *not* a cancellation call of our own: the portal is Stripe's own
+   * page, and a cancellation made there comes back as a webhook, which revokes the
+   * tier through the one function that writes entitlements. Nothing this client does
+   * decides access, so there is no optimistic "you are free now" state here — the
+   * account refreshes when the customer returns.
+   *
+   * The 404 is answered rather than treated as an outage: an account whose access was
+   * granted by hand has no Stripe subscription to manage, and saying so is the truth.
+   */
+  async function handleManageSubscription() {
+    setDetail(null);
+
+    if (!auth.accessToken) {
+      setNotice('paywall.signInRequired');
+      return;
+    }
+
+    setBusy(true);
+    setNotice('premium.portalOpening');
+
+    try {
+      const portal = await createPortalSession(auth.accessToken, {
+        // Same contract as checkout: the browser's own origin, validated server-side
+        // against the allow-list CORS uses. Native has none and omits it.
+        returnOrigin: returnOrigin(),
+      });
+
+      const url = portal.portal_url;
+      if (!url) {
+        setNotice('premium.portalFailed');
+        setDetail(portal.status || null);
+        return;
+      }
+
+      if (!isCheckoutUrlOpenable(url)) {
+        // Same rule as a payment page: an `http://` billing page would carry the
+        // customer's card details in clear text.
+        setNotice('premium.portalRedirectFailed');
+        setDetail(url);
+        return;
+      }
+
+      await openCheckout(url);
+    } catch (caught) {
+      if (isApiError(caught) && caught.status === 404) {
+        setNotice('premium.noBilling');
+        setDetail(caught.message);
+        return;
+      }
+      setNotice('premium.portalFailed');
+      setDetail(isApiError(caught) ? caught.message : null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // The panel is height-capped, so the confirmation can appear below the fold.
   // Reveal it rather than rendering feedback the user never sees.
   useEffect(() => {
@@ -436,21 +497,49 @@ export default function PremiumScreen() {
         </View>
 
         {/*
-          Entitled accounts get a statement, not a button. The server would refuse a
-          second purchase anyway (`already_premium`), and offering one to somebody who
-          has already paid is the kind of thing that ends in a support email.
+          Entitled accounts get a statement and a way to manage what they bought —
+          never a purchase button. The server would refuse a second purchase anyway
+          (`already_premium`), and offering one to somebody who has already paid is
+          the kind of thing that ends in a support email.
+
+          "Manage" rather than "Cancel": the portal is Stripe's own page and does
+          cards, receipts and cancellation, and a button that promises only
+          cancellation would misdescribe it. It is the *primary* action for a
+          subscriber — the same filled gold as Subscribe — because for them it is the
+          only thing left to do on this screen.
         */}
         {auth.isPremium ? (
-          <View
-            accessibilityRole="alert"
-            style={[
-              styles.notice,
-              { borderColor: `${colors.gold}66`, backgroundColor: `${colors.gold}14` },
-            ]}>
-            <ThemedText type="small" style={[styles.noticeText, { color: colors.accent }]}>
-              {t('premium.alreadyPremium')}
-            </ThemedText>
-          </View>
+          <>
+            <View
+              accessibilityRole="alert"
+              style={[
+                styles.notice,
+                { borderColor: `${colors.gold}66`, backgroundColor: `${colors.gold}14` },
+              ]}>
+              <ThemedText type="small" style={[styles.noticeText, { color: colors.accent }]}>
+                {t('premium.alreadyPremium')}
+              </ThemedText>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('premium.manageSubscriptionHint')}
+              accessibilityState={{ busy }}
+              disabled={busy}
+              onPress={() => void handleManageSubscription()}
+              style={({ pressed }) => [
+                styles.subscribe,
+                { backgroundColor: colors.gold, opacity: busy ? 0.6 : 1 },
+                pressed && styles.pressed,
+              ]}>
+              {busy ? (
+                <ActivityIndicator color={ON_GOLD} />
+              ) : (
+                <ThemedText style={[styles.subscribeText, { color: ON_GOLD }]}>
+                  {t('premium.manageSubscription')}
+                </ThemedText>
+              )}
+            </Pressable>
+          </>
         ) : auth.signedIn ? (
           /*
             The label follows the catalogue, not the product: naming the two payment

@@ -577,10 +577,20 @@ customer pays and nothing happens.
    otherwise the offer simply does not appear, which is a filter rather than an
    error. The reasoning is in the `payment_method_types` note at the top of
    `backend/payments.py`.
-2. **Nothing else.** There is no product or price to create: the session is built
-   from this server's own catalogue in `backend/checkout.py`, line items included,
-   so the price the app shows and the price Stripe charges have exactly one source
-   and cannot drift apart.
+2. **No product or price to create.** The session is built from this server's own
+   catalogue in `backend/checkout.py`, line items included, so the price the app
+   shows and the price Stripe charges have exactly one source and cannot drift
+   apart.
+3. **Activate the Customer Portal** — Dashboard → Settings → **Billing** → Customer
+   portal. Switch on cancellation, payment-method updates and invoice history, then
+   **Save**. This is not optional: `POST /api/create-portal-session` is what the
+   "จัดการการสมัครสมาชิก" (Manage subscription) button on `/premium` calls, and until
+   the portal is activated Stripe refuses every request with
+   `You have not activated the customer portal` — a 502 whose message names this
+   setting rather than looking like an API fault.
+
+   It is configured **per mode**: a portal set up in test mode still refuses requests
+   in live mode until it is saved there too. Check both before selling anything.
 
 #### 2. Register the webhook endpoint
 
@@ -592,6 +602,8 @@ Events : checkout.session.completed
          checkout.session.async_payment_succeeded
          checkout.session.async_payment_failed
          checkout.session.expired
+         charge.refunded
+         customer.subscription.deleted
 ```
 
 `https://superheng-api.onrender.com/api/webhook` is the same handler under a
@@ -603,6 +615,29 @@ The `async_payment_*` events are not decoration. A session can complete while it
 payment is still settling, so the grant waits for the event that means the money
 actually arrived; without those two subscriptions a delayed payment would be
 recorded for the ledger and never granted.
+
+The two **revoking** events are the other half of the lifecycle, and they are the
+only way access is ever taken away automatically:
+
+* `charge.refunded` — **revokes** the account (tier `free`, expiry cleared) when the
+  charge was refunded **in full**. Stripe fires the same event for a partial refund,
+  and a goodwill refund of part of a price does not end somebody's month: a partial
+  refund is written to `payment_events` with `result: recorded` and changes nothing.
+* `customer.subscription.deleted` — **revokes** unconditionally. The subscription is
+  over. It cannot fire while the catalogue sells a one-time 30-day pass (`mode:
+  payment` creates no subscription); it is handled so that moving to a recurring plan
+  does not silently keep granting access to people who cancelled.
+
+Neither event carries a `client_reference_id`. The account is resolved from the
+Stripe **Customer** the event is billed to, through the unique
+`user_profiles.stripe_customer_id` index — which is why that column is recorded at
+checkout and deliberately **not** cleared on revocation. An event whose customer
+matches no profile is recorded as `unknown_user`: the ledger keeps it, and nobody's
+access changes.
+
+Revocation is **immediate**, not "until the period ends". That is a product
+decision, and it is the one to revisit if refunded customers should keep what they
+paid for until the expiry date they already had.
 
 Copy the endpoint's **signing secret** (`whsec_…`). Each endpoint has its own, and
 `stripe listen` prints a *different* one — pasting the wrong one makes every
@@ -704,10 +739,18 @@ Then check these in order. Each catches a different failure:
 6. **Re-send the same event** from the dashboard. The response must say `duplicate`
    and the expiry must not move. That is the idempotency check, and it is the one
    worth doing before launch.
-7. Refund the test payment and confirm the account keeps access until its expiry.
-   There is deliberately no automatic revocation on refund — losing access the
-   instant a refund is issued is a product decision, and it should be made
-   explicitly rather than as a side effect.
+7. Refund the test payment **in full** from the Stripe dashboard and confirm the
+   account drops to `is_premium: false` within a delivery or two — around here the
+   app shows the Subscribe button again. Then re-send the same `charge.refunded`
+   event: it must answer `duplicate` and change nothing. A **partial** refund must
+   *not* revoke: it lands as `result: recorded` and the account stays premium.
+8. Tap **จัดการการสมัครสมาชิก** (Manage subscription) as the premium account: a
+   `POST /api/create-portal-session` should return a `billing.stripe.com` URL and the
+   browser should land on the portal. A 404 means the account has no Stripe customer
+   recorded and none matches its email — the state a hand-granted premium is in. A
+   502 naming the customer portal means step 1.3 was not done, or not done in this
+   mode. Do **not** cancel a real subscription to test this: press the browser's Back
+   button from the portal instead, and confirm nothing changed.
 
 #### 6.5.1 A whole test-mode purchase, start to finish — 2026-10-18
 
