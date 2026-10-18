@@ -45,7 +45,8 @@
     "web": "expo start --web",
     "build": "expo export -p web",
     "postbuild": "node ./scripts/fix-pages-assets.js",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "smoke:paywall": "node ./scripts/smoke-test-paywall.js"
   },
   "engines": {
     "node": ">=22.13.0"

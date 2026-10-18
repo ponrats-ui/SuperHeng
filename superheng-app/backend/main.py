@@ -38,6 +38,9 @@ Endpoints
 ``POST /api/webhook/stripe`` (alias ``/api/webhook``)
                           Stripe's server-to-server events. Signature-verified,
                           idempotent, and the only code path that grants premium.
+``GET /api/diagnostics/paywall``
+                          which paywall dependency is configured and which is
+                          missing, by environment-variable name and never by value
 
 Design notes
 ------------
@@ -222,7 +225,11 @@ SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or "").strip()
 # with EXPO_PUBLIC_ (which inlines a value into the app bundle for anyone to
 # read), and must never be committed. The single consumer is `webhook.py`, which
 # is also the only module allowed to decide an entitlement.
-SUPABASE_SERVICE_KEY = (os.getenv("SUPABASE_SERVICE_KEY") or "").strip()
+#: The variable is named rather than inlined so `GET /api/diagnostics/paywall` can
+#: report *which* one is missing without restating the string. A diagnostic that
+#: names a variable nothing reads is worse than no diagnostic at all.
+SUPABASE_SERVICE_KEY_ENV = "SUPABASE_SERVICE_KEY"
+SUPABASE_SERVICE_KEY = (os.getenv(SUPABASE_SERVICE_KEY_ENV) or "").strip()
 
 # Module-level singleton. None until the first successful initialisation.
 supabase_client: Client | None = None
@@ -502,7 +509,8 @@ app.add_middleware(
 
 #: FRONTEND_BASE_URL, if the operator set it. A bare origin: scheme, host, optional
 #: port — no path, query or fragment, which is what an `Origin` header carries.
-FRONTEND_BASE_URL = (os.getenv("FRONTEND_BASE_URL") or "").strip().rstrip("/")
+FRONTEND_BASE_URL_ENV = "FRONTEND_BASE_URL"
+FRONTEND_BASE_URL = (os.getenv(FRONTEND_BASE_URL_ENV) or "").strip().rstrip("/")
 
 #: Loopback, in any of the spellings a dev server actually uses. Excluded from the
 #: open-redirect concern above on purpose: redirecting a browser to its own machine
@@ -755,6 +763,142 @@ async def health() -> dict[str, Any]:
                 "configured" if _service_key_problem() is None else "not_configured"
             ),
         },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Paywall diagnostics
+# ---------------------------------------------------------------------------
+# The paywall can be wrong in four independent ways and, from outside, they look
+# identical: the button does something unhelpful and no money moves. Naming which of
+# the four is missing — without a dashboard, a log dive, or the Stripe dashboard — is
+# the entire purpose of this route, and it exists because of a failure that was
+# invisible until a real customer tried to pay: a wildcard `CORS_ORIGINS` with no
+# named frontend origin, which refuses *every* browser checkout with a 403 before a
+# session is ever created.
+#
+# PUBLIC ON PURPOSE. It reports whether four *named* environment variables are present
+# and shaped like usable credentials — never a value, never a prefix of one. That is
+# the same exposure `/api/health` already carries for two of them, and requiring a
+# token would withhold the diagnostic in precisely the state it exists for: a
+# deployment whose checkout is broken before anybody can sign in.
+#
+# It answers from presence and shape rather than by calling Stripe. A live probe is
+# the honest way to notice a *revoked* key, and it is deliberately absent: this route
+# takes no credential, so a live one would let anonymous callers spend this process's
+# Stripe rate limit and read account validity from the timing. What it does instead is
+# reuse the very predicates the checkout and webhook paths use
+# (`payments.secret_key_problem`, `_service_key_problem`), so a diagnostic cannot
+# disagree with the code it describes.
+DIAGNOSTICS_OK = "ok"
+DIAGNOSTICS_DEGRADED = "degraded"
+DIAGNOSTICS_NOT_CONFIGURED = "not_configured"
+
+
+@app.get(
+    "/api/diagnostics/paywall",
+    tags=["meta"],
+    summary="Which paywall dependencies are configured",
+    response_description=(
+        "One boolean per dependency, plus the names (never the values) of what is "
+        "missing"
+    ),
+)
+async def paywall_diagnostics(response: Response) -> dict[str, Any]:
+    """Report what the paywall is missing, in the terms an operator can act on.
+
+    `status` is the field to branch on, and it has three values rather than two,
+    because "broken" and "not set up yet" need opposite responses:
+
+    * ``ok`` — everything a completed payment needs is configured, including an
+      origin a payment may return to.
+    * ``not_configured`` — nothing about payments is set up. That is the beta's
+      honest "not open yet" state, which the app already renders correctly (the pill
+      says coming soon, the button says subscribe, the methods block is hidden), so
+      there is nothing for a warning to add and no way for a buyer to lose money.
+    * ``degraded`` — *something* is configured and something else is missing. This is
+      the dangerous half-state and the one worth shouting about: a gateway with no
+      entitlement writer takes real money and records nothing, and a gateway with no
+      named return origin refuses every browser checkout while claiming to be open.
+
+    `checks` separates the individual variables from the aggregate on purpose. Two
+    answers to "is the gateway configured" is the drift this codebase avoids
+    elsewhere. `gateway_configured` is the secret key alone — the thing actually
+    named in a bug report — while `checkout_enabled` is
+    `checkout.provider_configured()`, the same answer `/api/health` reports as
+    `gateway_configured`: a purchase needs the secret key *and* the signing secret, so
+    a build with one of the two is `gateway_configured: true`,
+    `webhook_configured: false`, `checkout_enabled: false` — a precise description
+    rather than a contradiction.
+
+    `missing` holds environment-variable names in the order they should be fixed, and
+    `details` holds one sentence per name in that same order. Those sentences are the
+    ones the checkout and webhook 503s already carry, so a report and an error cannot
+    word the same problem differently.
+    """
+    # Never cached. This describes process configuration, which only changes across a
+    # restart or a redeploy, and a cached `ok` is the single answer that could hide a
+    # deployment that has just been broken.
+    response.headers["Cache-Control"] = "no-store"
+
+    gateway_problem = payments.secret_key_problem()
+    webhook_problem = payments.webhook_secret_problem()
+    writer_problem = _service_key_problem()
+    return_origins = _allowed_return_origins()
+    return_origin_problem = (
+        None
+        if return_origins
+        else (
+            f"{FRONTEND_BASE_URL_ENV} is not set and CORS_ORIGINS is a wildcard, so no "
+            "origin may be sent a payment back to and every browser checkout is "
+            f"refused with a 403. Set {FRONTEND_BASE_URL_ENV} to the app's origin, or "
+            "narrow CORS_ORIGINS to it — an origin that may call this API is an "
+            "origin a payment may return to."
+        )
+    )
+
+    checks = {
+        "gateway_configured": gateway_problem is None,
+        "webhook_configured": webhook_problem is None,
+        "entitlement_writer_configured": writer_problem is None,
+        # Asked as a configuration question — is the variable named? — and reported
+        # beside the question that actually decides a checkout. A narrowed
+        # CORS_ORIGINS answers the second without answering this, and calling that
+        # deployment broken would be worse than saying nothing.
+        "cors_configured": bool(FRONTEND_BASE_URL),
+        "return_origin_configured": bool(return_origins),
+        # The aggregate the app and `/api/health` both branch on.
+        "checkout_enabled": checkout.provider_configured(),
+    }
+
+    # The three credentials are listed first because a half-configured deployment
+    # usually has one of them wrong, and only then the origin a payment returns to.
+    credential_problems = (
+        (payments.SECRET_KEY_ENV, gateway_problem),
+        (payments.WEBHOOK_SECRET_ENV, webhook_problem),
+        (SUPABASE_SERVICE_KEY_ENV, writer_problem),
+    )
+    entries = credential_problems + ((FRONTEND_BASE_URL_ENV, return_origin_problem),)
+    missing = [name for name, problem in entries if problem is not None]
+    details = [problem for _, problem in entries if problem is not None]
+
+    if not missing:
+        status = DIAGNOSTICS_OK
+    elif all(problem is not None for _, problem in credential_problems):
+        status = DIAGNOSTICS_NOT_CONFIGURED
+    else:
+        status = DIAGNOSTICS_DEGRADED
+
+    return {
+        "status": status,
+        "checks": checks,
+        "missing": missing,
+        "details": details,
+        # Reported from the catalogue rather than restated here, so what an operator
+        # reads is what the paywall would actually offer.
+        "provider": checkout.provider_name(),
+        "plans": [plan.id for plan in checkout.PLANS],
+        "currency": checkout.CURRENCY_THB,
     }
 
 

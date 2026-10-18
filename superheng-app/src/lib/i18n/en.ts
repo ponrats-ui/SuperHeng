@@ -396,6 +396,23 @@ export const en = {
   'paywall.checkoutRedirectFailed':
     'Stripe created a payment page but this device would not open it. Nothing was '
     + 'charged — if a popup blocker is on, allow this site and try again.',
+  // The paywall's own infrastructure, as `GET /api/diagnostics/paywall` reports it.
+  //
+  // Rendered only in the `degraded` state — something configured and something else
+  // missing — which is the state that can lose money: a gateway with no entitlement
+  // writer takes a payment and records nothing, and a gateway with no named return
+  // origin refuses every checkout with a 403. A build that never had payments set up
+  // says nothing here, because the coming-soon copy already covers it and nothing can
+  // be lost.
+  //
+  // `{missing}` is filled with environment-variable *names* from the server, so the
+  // banner names what to set instead of which screen is broken. The operator
+  // sentences shown beneath it are the server's own and stay untranslated on purpose:
+  // they name variables, files and dashboards.
+  'paywall.diagnosticsTitle': '⚠️ Paywall degraded',
+  'paywall.diagnosticsBody':
+    'The server is missing {missing}. A payment started now could fail, or be taken '
+    + 'and never recorded.',
   // Shown after Stripe sends the customer back. The redirect proves nothing: the
   // entitlement is written by the webhook, which can land a moment later, so the
   // wording is "confirming" rather than "confirmed".

@@ -10,8 +10,10 @@ import { useAppTheme } from '@/hooks/use-app-theme';
 import {
   createCheckoutSession,
   getCheckoutPlans,
+  getPaywallDiagnostics,
   isApiError,
   type CheckoutCatalogue,
+  type PaywallDiagnostics,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { isCheckoutUrlOpenable, openCheckout, returnOrigin } from '@/lib/checkout';
@@ -82,6 +84,16 @@ const PAYMENT_POLL_INTERVAL_MS = 2_000;
  * the payment-method block is not rendered at all, because advertising PromptPay on
  * a build that cannot offer it would be a claim the button cannot keep.
  *
+ * **Half**-configured is the state that needed saying out loud, and now does:
+ * `GET /api/diagnostics/paywall` reports which dependency is missing, and a
+ * `degraded` answer renders a banner naming the environment variable. That exists
+ * because a real deployment was silently unable to sell — a wildcard `CORS_ORIGINS`
+ * with no named return origin refused every browser checkout with a 403 — and from
+ * this screen that was indistinguishable from a customer deciding not to pay. It is
+ * shown only when something is configured *and* something else is missing: a build
+ * that never had payments set up already says "coming soon", and repeating that as a
+ * warning would cry wolf on every visit.
+ *
  * The price comes from `GET /api/checkout/plans` when it can be fetched, falling
  * back to the translated copy. Two prices that can disagree is the drift this
  * avoids: the number shown here and the number the server would charge have one
@@ -114,6 +126,7 @@ export default function PremiumScreen() {
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState<string | null>(null);
   const [catalogue, setCatalogue] = useState<CheckoutCatalogue | null>(null);
+  const [diagnostics, setDiagnostics] = useState<PaywallDiagnostics | null>(null);
   const scrollRef = useRef<ScrollView>(null);
 
   const returningFromStripe = params.checkout === 'success' || params.success === 'true';
@@ -127,6 +140,23 @@ export default function PremiumScreen() {
     void getCheckoutPlans().then(
       (result) => {
         if (!cancelled) setCatalogue(result);
+      },
+      () => undefined
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Also public and also silent on failure. An unreachable diagnostics endpoint says
+  // nothing about whether a purchase would work, so it must never be what stops one —
+  // this is a report, not a gate. Asked alongside the catalogue rather than inside the
+  // checkout attempt, because the state it describes is visible before anyone taps.
+  useEffect(() => {
+    let cancelled = false;
+    void getPaywallDiagnostics().then(
+      (result) => {
+        if (!cancelled) setDiagnostics(result);
       },
       () => undefined
     );
@@ -273,6 +303,37 @@ export default function PremiumScreen() {
           </ThemedText>
         </View>
       </View>
+
+      {/*
+        The deployment's own state, when the server reports that something is
+        configured and something else is missing — see the docstring. Above the offer
+        rather than below it because it changes what the rest of the screen means: a
+        price with no way to pay for it is the thing this is telling the reader.
+      */}
+      {diagnostics?.status === 'degraded' ? (
+        <Card>
+          <View accessibilityRole="alert" style={styles.diagHeader}>
+            <View style={[styles.diagRule, { backgroundColor: colors.warning }]} />
+            <ThemedText type="smallBold" style={[styles.diagTitle, { color: colors.warning }]}>
+              {t('paywall.diagnosticsTitle')}
+            </ThemedText>
+          </View>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.diagBody}>
+            {/* The names come from the server, so this cannot go stale when a
+                variable is renamed or a fifth check is added. */}
+            {t('paywall.diagnosticsBody', { missing: diagnostics.missing.join(', ') })}
+          </ThemedText>
+          {diagnostics.details.map((sentence) => (
+            <ThemedText
+              key={sentence}
+              type="small"
+              themeColor="textMuted"
+              style={styles.diagDetail}>
+              {sentence}
+            </ThemedText>
+          ))}
+        </Card>
+      ) : null}
 
       <Card>
         <View style={[styles.pillRow]}>
@@ -513,6 +574,34 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 34,
     fontWeight: '800',
+  },
+
+  // Diagnostics banner -----------------------------------------------------
+  // Laid out like the dashboard's error card (a coloured rule beside the title)
+  // rather than like the gold notices below, because this is not a message about the
+  // customer's payment — it is a message about the deployment.
+  diagHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  diagRule: {
+    width: 3,
+    height: 14,
+    borderRadius: 2,
+  },
+  diagTitle: {
+    letterSpacing: 0.4,
+  },
+  diagBody: {
+    fontSize: 12,
+    lineHeight: 20,
+    marginTop: Spacing.two,
+  },
+  diagDetail: {
+    fontSize: 10,
+    lineHeight: 16,
+    marginTop: Spacing.one,
   },
 
   // Features --------------------------------------------------------------

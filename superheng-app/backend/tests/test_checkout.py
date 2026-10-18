@@ -811,3 +811,190 @@ def test_health_reports_the_entitlement_writer_state(monkeypatch):
     payload = TestClient(main.app).get("/api/health").json()
 
     assert payload["checkout"]["entitlement_writer"] in {"configured", "not_configured"}
+
+
+# ---------------------------------------------------------------------------
+# `GET /api/diagnostics/paywall` — which dependency is missing, by name
+# ---------------------------------------------------------------------------
+# This route exists because of a specific, silent failure: `CORS_ORIGINS=*` with no
+# `FRONTEND_BASE_URL` refuses *every* browser checkout with a 403, and on 2026-10-18
+# nothing in the app, the logs or `/api/health` said which of the four things to fix.
+# So the tests below are about two properties the route must hold to: it names the
+# variable rather than the value (it is public), and it tells the dangerous
+# half-configured state apart from a build that simply never had payments set up.
+
+#: Shaped like real credentials and deliberately not real ones. The predicates under
+#: test judge presence *and* shape, so a placeholder would report as missing and these
+#: tests would be asserting the wrong thing.
+_FAKE_SECRET_KEY = "sk_test_51ABCDEFGHIJKLMNOPQRSTUVWX"
+_FAKE_WEBHOOK_SECRET = "whsec_ABCDEFGHIJKLMNOPQRSTUVWX"
+_FAKE_SERVICE_KEY = "service-role-key-for-the-suite"
+_APP_ORIGIN = "https://app.example.test"
+
+
+def _configure_paywall(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    secret: str = _FAKE_SECRET_KEY,
+    webhook: str = _FAKE_WEBHOOK_SECRET,
+    service: str = _FAKE_SERVICE_KEY,
+    origin: str = _APP_ORIGIN,
+) -> None:
+    """Set all four the way a working deployment has them.
+
+    The two Stripe values go through the environment because `payments` reads its
+    configuration when it is called; the Supabase service key and the frontend origin
+    are patched as attributes because `main.py` reads those at import — the same seam
+    the webhook tests already use.
+    """
+    monkeypatch.setenv(payments.SECRET_KEY_ENV, secret)
+    monkeypatch.setenv(payments.WEBHOOK_SECRET_ENV, webhook)
+    monkeypatch.setattr(main, "SUPABASE_SERVICE_KEY", service)
+    monkeypatch.setattr(main, "FRONTEND_BASE_URL", origin)
+
+
+def _diagnostics():
+    """The raw response, so the leak assertions below read the wire bytes."""
+    return TestClient(main.app).get("/api/diagnostics/paywall")
+
+
+def test_a_fully_configured_paywall_reports_ok(monkeypatch):
+    _configure_paywall(monkeypatch)
+
+    body = _diagnostics().json()
+
+    assert body["status"] == main.DIAGNOSTICS_OK
+    assert all(body["checks"].values())
+    assert body["missing"] == []
+    assert body["details"] == []
+
+
+def test_diagnostics_names_the_variable_and_never_its_value(monkeypatch):
+    """The report is public, so it lists environment-variable *names*. A credential
+    must not be able to reach this body even when it is the value being judged."""
+    _configure_paywall(monkeypatch)
+    monkeypatch.delenv(payments.WEBHOOK_SECRET_ENV, raising=False)
+
+    response = _diagnostics()
+    body = response.json()
+
+    assert body["status"] == main.DIAGNOSTICS_DEGRADED
+    assert body["missing"] == [payments.WEBHOOK_SECRET_ENV]
+    assert body["checks"]["webhook_configured"] is False
+    # The two credentials that *are* configured must not appear anywhere in it.
+    assert _FAKE_SECRET_KEY not in response.text
+    assert _FAKE_SERVICE_KEY not in response.text
+
+
+def test_a_gateway_with_no_entitlement_writer_is_degraded(monkeypatch):
+    """The dangerous half-state: real money can be taken and nothing recorded."""
+    _configure_paywall(monkeypatch)
+    monkeypatch.setattr(main, "SUPABASE_SERVICE_KEY", "")
+
+    body = _diagnostics().json()
+
+    assert body["status"] == main.DIAGNOSTICS_DEGRADED
+    assert body["missing"] == [main.SUPABASE_SERVICE_KEY_ENV]
+    assert body["checks"]["entitlement_writer_configured"] is False
+
+
+def test_an_untouched_build_is_not_configured_rather_than_degraded(monkeypatch):
+    """Nothing set up is the beta's honest "not open yet" state, which the paywall
+    already renders correctly (coming-soon pill, subscribe, hidden methods). Calling
+    it degraded would put a warning on a screen where nothing can be lost."""
+    monkeypatch.setattr(main, "SUPABASE_SERVICE_KEY", "")
+    monkeypatch.setattr(main, "FRONTEND_BASE_URL", "")
+
+    body = _diagnostics().json()
+
+    assert body["status"] == main.DIAGNOSTICS_NOT_CONFIGURED
+    assert body["checks"]["checkout_enabled"] is False
+    assert body["missing"] == [
+        payments.SECRET_KEY_ENV,
+        payments.WEBHOOK_SECRET_ENV,
+        main.SUPABASE_SERVICE_KEY_ENV,
+        main.FRONTEND_BASE_URL_ENV,
+    ]
+
+
+def test_the_wildcard_alone_is_reported_as_a_broken_checkout(monkeypatch):
+    """The regression this route was written for.
+
+    Payments fully configured, `CORS_ORIGINS=*`, no named frontend origin: the browser
+    can call the API, and every checkout is refused with a 403 before a session
+    exists. That is what production did on 2026-10-18, and it has to be loud.
+    """
+    _configure_paywall(monkeypatch, origin="")
+    monkeypatch.setattr(main, "FRONTEND_BASE_URL", "")
+    monkeypatch.setattr(main, "CORS_ORIGINS", ["*"])
+
+    body = _diagnostics().json()
+
+    assert body["status"] == main.DIAGNOSTICS_DEGRADED
+    assert body["checks"]["cors_configured"] is False
+    assert body["checks"]["return_origin_configured"] is False
+    assert body["missing"] == [main.FRONTEND_BASE_URL_ENV]
+
+
+def test_a_narrowed_cors_list_answers_the_return_origin_question(monkeypatch):
+    """The same origin in `CORS_ORIGINS` satisfies the check, so the report must not
+    insist on one particular spelling of the setting. `cors_configured` is then false
+    — the variable genuinely is not named — while a checkout works anyway, which is
+    the distinction the two fields exist to draw."""
+    _configure_paywall(monkeypatch, origin="")
+    monkeypatch.setattr(main, "FRONTEND_BASE_URL", "")
+    monkeypatch.setattr(main, "CORS_ORIGINS", [_APP_ORIGIN])
+
+    body = _diagnostics().json()
+
+    assert body["status"] == main.DIAGNOSTICS_OK
+    assert body["checks"]["cors_configured"] is False
+    assert body["checks"]["return_origin_configured"] is True
+
+
+def test_a_publishable_key_is_not_a_configured_gateway(monkeypatch):
+    """Presence is not the question. Pasting `pk_` where `sk_` belongs is the most
+    likely mistake, and a publishable key cannot create a session — so calling that
+    gateway configured would be the report lying about the one thing it is for."""
+    _configure_paywall(monkeypatch, secret="pk_test_51ABCDEFGHIJKLMNOPQRSTUVWX")
+
+    body = _diagnostics().json()
+
+    assert body["checks"]["gateway_configured"] is False
+    assert body["status"] == main.DIAGNOSTICS_DEGRADED
+
+
+def test_diagnostics_is_public_and_never_cached(monkeypatch):
+    """Public because the state it describes is only observable before anyone can
+    sign in, and uncached because a cached `ok` is the one answer that could hide a
+    deployment that has just been broken."""
+    _configure_paywall(monkeypatch)
+
+    response = _diagnostics()
+
+    assert response.status_code == 200  # and no Authorization header was sent
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_the_aggregate_cannot_disagree_with_health(monkeypatch):
+    """`checkout_enabled` and health's `gateway_configured` are one answer computed
+    once. Two booleans that can drift are how a paywall ends up offering a purchase
+    the server then refuses."""
+    _configure_paywall(monkeypatch)
+    client = TestClient(main.app)
+
+    assert (
+        client.get("/api/diagnostics/paywall").json()["checks"]["checkout_enabled"]
+        == client.get("/api/health").json()["checkout"]["gateway_configured"]
+        is True
+    )
+
+    # And with only half the pair set — a purchase needs the secret key *and* the
+    # signing secret, so both must say no.
+    monkeypatch.delenv(payments.WEBHOOK_SECRET_ENV, raising=False)
+
+    assert (
+        client.get("/api/diagnostics/paywall").json()["checks"]["checkout_enabled"]
+        == client.get("/api/health").json()["checkout"]["gateway_configured"]
+        is False
+    )

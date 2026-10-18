@@ -835,6 +835,45 @@ export type CheckoutSession = {
 };
 
 /**
+ * The answer to `GET /api/diagnostics/paywall` — what the *server* is missing.
+ *
+ * `status` is the field to branch on, and there are three values rather than two
+ * because "broken" and "not set up yet" need opposite responses:
+ *
+ * - `'ok'` — a purchase would complete: gateway, signing secret, entitlement writer
+ *   and a return origin are all in place.
+ * - `'not_configured'` — no payments are set up at all. That is the honest
+ *   coming-soon state this screen already renders, so nothing needs to be said.
+ * - `'degraded'` — something is configured and something else is missing. This one
+ *   is worth showing: a gateway with no entitlement writer takes money and records
+ *   nothing, and a gateway with no named return origin refuses every checkout.
+ *
+ * `missing` holds environment-variable **names**, never values, which is why the
+ * caller can print it. `details` holds one operator sentence per name, in the same
+ * order — the same sentences the checkout and webhook 503s carry, so the banner and
+ * the error cannot word one problem two ways.
+ */
+export type PaywallDiagnostics = {
+  status: 'ok' | 'degraded' | 'not_configured';
+  checks: {
+    gateway_configured: boolean;
+    webhook_configured: boolean;
+    entitlement_writer_configured: boolean;
+    /** Whether `FRONTEND_BASE_URL` is named. Reported beside the next field. */
+    cors_configured: boolean;
+    /** Whether *any* origin a payment may return to exists — the one that decides. */
+    return_origin_configured: boolean;
+    /** The aggregate the paywall button branches on; matches `/api/health`. */
+    checkout_enabled: boolean;
+  };
+  missing: string[];
+  details: string[];
+  provider: string | null;
+  plans: string[];
+  currency: string;
+};
+
+/**
  * A fresh key identifying one *purchase intent*, for `POST /api/checkout/create-session`.
  *
  * The transport retries a request that timed out or met a booting server. A retried
@@ -1713,6 +1752,50 @@ export function parseCheckoutCatalogue(body: unknown): CheckoutCatalogue {
 }
 
 /**
+ * Validates the `/api/diagnostics/paywall` payload.
+ *
+ * Every boolean is `true` only when the server said `true`, and an unrecognised
+ * status reads as `'degraded'` rather than as `'ok'` or `'not_configured'`: a state
+ * this build does not understand is a reason to say something, and the two
+ * alternatives are "stay quiet" and "claim everything is fine".
+ */
+export function parsePaywallDiagnostics(body: unknown): PaywallDiagnostics {
+  const root = asRecord(body);
+  if (!root) {
+    throw new ApiError('malformed', 'The diagnostics service returned a non-object body.');
+  }
+
+  const checks = asRecord(root.checks) ?? {};
+  const status = asString(root.status);
+
+  return {
+    status:
+      status === 'ok' || status === 'not_configured' || status === 'degraded'
+        ? status
+        : 'degraded',
+    checks: {
+      gateway_configured: checks.gateway_configured === true,
+      webhook_configured: checks.webhook_configured === true,
+      entitlement_writer_configured: checks.entitlement_writer_configured === true,
+      cors_configured: checks.cors_configured === true,
+      return_origin_configured: checks.return_origin_configured === true,
+      checkout_enabled: checks.checkout_enabled === true,
+    },
+    missing: (Array.isArray(root.missing) ? root.missing : []).filter(
+      (name): name is string => typeof name === 'string' && name.length > 0
+    ),
+    details: (Array.isArray(root.details) ? root.details : []).filter(
+      (detail): detail is string => typeof detail === 'string' && detail.length > 0
+    ),
+    provider: typeof root.provider === 'string' ? root.provider : null,
+    plans: (Array.isArray(root.plans) ? root.plans : []).filter(
+      (plan): plan is string => typeof plan === 'string'
+    ),
+    currency: asString(root.currency, 'THB'),
+  };
+}
+
+/**
  * Validates the `/api/me` payload.
  *
  * The tier is narrowed to the two known values rather than passed through, so a
@@ -2203,6 +2286,24 @@ export async function getAccount(
  */
 export async function getCheckoutPlans(options?: RequestOptions): Promise<CheckoutCatalogue> {
   return parseCheckoutCatalogue(await request('/api/checkout/plans', options));
+}
+
+/**
+ * What the server is missing before it can sell anything. Public — no token needed.
+ *
+ * Asked by the paywall so a half-configured deployment says *which* variable is
+ * missing instead of failing like a generic outage. The failure it exists for is
+ * real: production once refused every browser checkout with a 403 because no return
+ * origin was named, and nothing on the screen or in the app's own error said so.
+ *
+ * A failure here is the caller's to ignore — an unreachable diagnostics endpoint
+ * says nothing about whether a purchase would work, so it must never be what stops
+ * one.
+ */
+export async function getPaywallDiagnostics(
+  options?: RequestOptions
+): Promise<PaywallDiagnostics> {
+  return parsePaywallDiagnostics(await request('/api/diagnostics/paywall', options));
 }
 
 /**

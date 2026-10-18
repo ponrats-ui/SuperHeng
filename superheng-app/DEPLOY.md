@@ -758,6 +758,89 @@ moved, and it is inert apart from that. To revoke it, set the tier back rather t
 deleting the row (see [6.4](#64-making-an-account-premium-by-hand)), and revoke the
 same email in Supabase → Authentication if the seat should go away entirely.
 
+#### 6.5.2 Re-check it without a purchase: `npm run smoke:paywall`
+
+[`scripts/smoke-test-paywall.js`](scripts/smoke-test-paywall.js) runs the automated
+half of the list above — items 1 and 3 — against any deployment in about three
+seconds, with no test card, no account and no dashboard:
+
+```bash
+npm run smoke:paywall                                  # the deployed beta
+npm run smoke:paywall -- --api=http://127.0.0.1:8000 --allow-unconfigured
+```
+
+What it asks, and why each one is there:
+
+1. **`GET /api/health` answers.** Cheap, and it warms a sleeping free instance before
+   the checks that matter — which is why the per-request timeout is a generous 60s
+   rather than a tight one that would report a healthy service as down.
+2. **`GET /api/diagnostics/paywall` reports `ok`.** `degraded` always fails: something
+   is configured and something else is missing, which is the one combination that can
+   take money it cannot account for. `not_configured` — the honest "not open yet"
+   state — also fails unless `--allow-unconfigured` says this deployment is not meant
+   to sell yet. The failure prints the server's own sentences, so the output names the
+   variable and where to set it.
+3. **CORS, as a browser asks it.** A real preflight for `POST
+   /api/create-checkout-session` from the app's origin, asserting the origin is allowed
+   **and** that `authorization` is permitted. Without that the browser refuses the
+   request before the button's own code runs, which is the failure that reads as "the
+   button is broken" with nothing in the API's log to explain it.
+4. **The checkout *route*, when a token is supplied.** With `SMOKE_TEST_TOKEN` in the
+   environment it POSTs a real session and asserts a payable `checkout_url`. This is
+   the only check that exercises the route's own return-origin validation, because the
+   route authenticates *before* it validates the origin: an anonymous caller gets a
+   401 before that code runs, which is exactly why item 2 stands in for it otherwise.
+   Opt-in because it creates a session — point it at a test-mode deployment, and note
+   that the token is an environment variable on purpose: a command line is visible to
+   every process on the machine and is kept in shell history.
+
+Exit codes: `0` all clear, `1` a check failed, `2` the invocation was wrong.
+
+#### 6.5.3 What the app says when the server is half-configured
+
+The smoke test reads `GET /api/diagnostics/paywall`; the paywall reads the same
+endpoint, so a half-configured deployment is visible in both places rather than only
+in the logs. It reports six booleans and a status:
+
+```json
+{
+  "status": "degraded",
+  "checks": {
+    "gateway_configured": true,
+    "webhook_configured": true,
+    "entitlement_writer_configured": true,
+    "cors_configured": false,
+    "return_origin_configured": false,
+    "checkout_enabled": true
+  },
+  "missing": ["FRONTEND_BASE_URL"],
+  "details": ["FRONTEND_BASE_URL is not set and CORS_ORIGINS is a wildcard, …"]
+}
+```
+
+* **`status` has three values, not two.** `ok`; `not_configured`, which is the
+  "not open yet" state the paywall already renders honestly (coming-soon pill,
+  subscribe, no payment methods) and which is therefore *silent*; and `degraded`,
+  which the paywall renders as a warning banner naming the missing variable. A build
+  that never had payments set up must not nag on every visit — only the state that can
+  lose money does.
+* **`missing` holds variable names, never values.** That is what makes it safe to be
+  public, which it has to be: the state it describes is only observable *before*
+  anyone can sign in. It is also uncached (`Cache-Control: no-store`), because a
+  cached `ok` is the one answer that could hide a deployment that has just broken.
+* **`gateway_configured` is the secret key alone, and `checkout_enabled` is the
+  aggregate** — the same answer `/api/health` reports as `gateway_configured`. A
+  purchase needs the secret key *and* the signing secret, so a build with one of the
+  two is `gateway_configured: true`, `webhook_configured: false`,
+  `checkout_enabled: false`: a precise description rather than two answers that can
+  drift. Pasting a `pk_` publishable key where `sk_` belongs reports as **not**
+  configured, because presence was never the question.
+* **It never calls Stripe.** A live probe would be the honest way to notice a
+  *revoked* key, and it is deliberately absent: the route takes no credential, so a
+  live one would let anonymous callers spend this process's Stripe rate limit and read
+  account validity from the timing. It reuses the same predicates the checkout and
+  webhook paths use instead, so the report cannot disagree with the code it describes.
+
 #### The invariant this feature is built around
 
 `POST /api/checkout/create-session` **never** charges and **never** grants, with a
