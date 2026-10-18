@@ -21,6 +21,23 @@ import type { PropsWithChildren } from 'react';
  * only that file still get a correct icon, and the PNGs after it give modern
  * browsers a size-appropriate one instead of scaling a 16px bitmap.
  *
+ * ## Where the SEO tags are, and why not here
+ *
+ * The title, description, Open Graph and Twitter Card tags are rendered by
+ * `components/seo-head.tsx` (copy in `lib/seo.ts`), **not** in this file.
+ *
+ * They were here first, and the exported HTML showed why that fails: Expo Router
+ * wraps the app in `react-helmet-async`, and static rendering writes helmet's own
+ * empty `<title data-rh="true">` into `<head>` *before* anything this document
+ * renders. The page therefore had two titles, the first one blank — and browsers
+ * and crawlers only read the first. Rendering through `Head` fills helmet's slot
+ * instead of racing it, so the document keeps the things helmet has no opinion
+ * about: charset, viewport, theme colour, icons and the scroll-view reset.
+ *
+ * `lang="th"` because the document, the title and the description are Thai. The
+ * in-app English toggle is client-side copy, not a second indexed URL — there is
+ * no `/en` route — so the document language follows the copy that crawlers read.
+ *
  * ## SDK note
  *
  * From SDK 58 a custom document must also render the values from
@@ -29,7 +46,7 @@ import type { PropsWithChildren } from 'react';
  */
 export default function Root({ children }: PropsWithChildren) {
   return (
-    <html lang="en">
+    <html lang="th">
       <head>
         <meta charSet="utf-8" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />

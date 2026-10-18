@@ -1,0 +1,13 @@
+# SuperHeng — robots.txt
+#
+# Every route this site exports is public marketing or app shell; there are no
+# private HTML pages to hide. Account data lives behind the API
+# (https://superheng-api.onrender.com), which is not crawlable and is not listed
+# here: a Disallow for another origin's paths would be ignored, and Disallowing
+# /api on this origin would only stop crawlers reading a route that does not
+# exist here.
+User-agent: *
+Allow: /
+
+# Absolute, because a sitemap reference in robots.txt must be a full URL.
+Sitemap: https://superheng-3yf.pages.dev/sitemap.xml

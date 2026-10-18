@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Every route `expo export -p web` writes to `dist/`, with the tab routes first.
+
+  No <lastmod>: it must be the date the *content* changed, and this file is a
+  static asset copied verbatim into the build — a date typed in here would be
+  wrong within a week, and a wrong lastmod is treated as noise by crawlers.
+  Frequencies are honest: the dashboard and draw pages change with every draw,
+  the reference pages do not.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://superheng-3yf.pages.dev/</loc>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://superheng-3yf.pages.dev/performance</loc>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://superheng-3yf.pages.dev/insights</loc>
+    <changefreq>daily</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://superheng-3yf.pages.dev/backtest</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://superheng-3yf.pages.dev/my-number</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://superheng-3yf.pages.dev/premium</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://superheng-3yf.pages.dev/about</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.4</priority>
+  </url>
+  <url>
+    <loc>https://superheng-3yf.pages.dev/donate</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.3</priority>
+  </url>
+</urlset>

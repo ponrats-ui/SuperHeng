@@ -3,7 +3,9 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { Platform } from 'react-native';
 
+import { AnalyticsTracker } from '@/components/analytics-tracker';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import { SeoHead } from '@/components/seo-head';
 import { ActiveUsersProvider } from '@/hooks/use-active-users';
 import { useAppTheme } from '@/hooks/use-app-theme';
 import { AuthProvider } from '@/lib/auth';
@@ -78,6 +80,14 @@ export default function RootLayout() {
             {/* Light content on the dark background, pinned rather than derived. */}
             <StatusBar style="light" />
             <AnimatedSplashOverlay />
+            {/* Title / description / Open Graph / Twitter Card, for every route. */}
+            <SeoHead />
+            {/*
+              GA4 pageviews. Rendered above the navigator so tab and modal
+              transitions are counted from one place; it draws nothing and does
+              nothing unless `EXPO_PUBLIC_GA_ID` was set at build time.
+            */}
+            <AnalyticsTracker />
             <Stack
               screenOptions={{
                 headerShown: false,

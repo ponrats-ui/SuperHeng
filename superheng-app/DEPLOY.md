@@ -922,6 +922,120 @@ The same applies to the free tier, so it is worth stating: `/`, `/api/health`,
 `/api/latest-draws`, `/api/predict/basic`, `/api/predict/advanced`, `/api/backtest`
 and `/api/checkout/plans` remain public and unaffected.
 
+## Step 7 — Marketing: SEO, share cards and analytics
+
+Everything a crawler or a share preview reads is build-time static, so this step
+has no moving parts at runtime — only two variables and one dashboard.
+
+### 7.1 What ships, and where it lives
+
+| Thing | File | Notes |
+|---|---|---|
+| `<title>`, description, robots, Open Graph, Twitter Card | [`src/components/seo-head.tsx`](src/components/seo-head.tsx), mounted in [`_layout.tsx`](src/app/_layout.tsx) | Rendered through `expo-router/head`, so it is in the **initial HTML** of all eight exported routes |
+| The copy itself (title, description, origin, image URL) | [`src/lib/seo.ts`](src/lib/seo.ts) | One place to change; the component only renders it |
+| Share image, 1200×630 | [`public/og-image.png`](public/og-image.png) | Rendered from [`scripts/og-card.html`](scripts/og-card.html) |
+| Crawler policy | [`public/robots.txt`](public/robots.txt) | Allow all; points at the sitemap |
+| Route list | [`public/sitemap.xml`](public/sitemap.xml) | The eight static routes |
+| GA4 | [`src/lib/analytics.ts`](src/lib/analytics.ts) + [`src/components/analytics-tracker.tsx`](src/components/analytics-tracker.tsx) | Off unless `EXPO_PUBLIC_GA_ID` is set |
+
+`public/` is copied verbatim to `dist/`, which is why these three files are at the
+site root and not under `assets/`.
+
+**The tags are not in `+html.tsx`, and that is deliberate.** Expo Router wraps the
+app in `react-helmet-async` for `expo-router/head`, and static rendering writes
+helmet's own `<title data-rh="true">` into `<head>` *before* anything the custom
+document renders. With the title typed into `+html.tsx` the exported page had two
+`<title>` elements and the first one was empty — browsers and crawlers read the
+first, so the tab would have been blank. Rendering through `Head` fills helmet's
+slot instead of racing it. `+html.tsx` keeps only what helmet has no opinion
+about: charset, viewport, theme colour, icons, `<html lang>`. This was found by
+inspecting `dist/index.html`, not by reading the docs — which is why 7.2 greps the
+built HTML.
+
+To change the share image, edit the HTML card and re-render it — the command is
+in the file's own comment. Chrome is used rather than an image library because it
+shapes Thai correctly (HarfBuzz); Pillow without libraqm does not, and Thai tone
+marks land in the wrong place.
+
+### 7.2 Check what a crawler will see
+
+```bash
+cd superheng-app
+npm run build
+grep -c '<title' dist/index.html          # must be 1, and it must not be empty
+grep -o '<title>[^<]*</title>' dist/index.html
+grep -o 'property="og:image" content="[^"]*"' dist/index.html
+grep -o 'name="twitter:card" content="[^"]*"' dist/index.html
+ls -l dist/robots.txt dist/sitemap.xml dist/og-image.png
+```
+
+`og:image` must come back as an **absolute** `https://…` URL. LINE and Facebook
+ignore root-relative ones, and a card with no image is the failure this exists to
+prevent. After a deploy, paste the URL into Facebook's Sharing Debugger
+(<https://developers.facebook.com/tools/debug/>) to force a re-scrape — LINE
+caches aggressively and only re-reads a URL after it changes or after LINE's own
+cache expires.
+
+### 7.3 Turn on GA4
+
+1. GA4 → **Admin → Data streams → Add stream → Web**, URL
+   `https://superheng-3yf.pages.dev`. Copy the **Measurement ID** (`G-…`).
+2. Put it in [`wrangler.toml`](wrangler.toml)'s `[vars]` table and push:
+
+   ```toml
+   EXPO_PUBLIC_GA_ID = "G-XXXXXXXXXX"
+   ```
+
+   It must be a **build** variable, for the same reason `EXPO_PUBLIC_API_URL` is
+   (step 2): a Pages *runtime* variable never reaches `npm run build`, and Expo
+   inlines `EXPO_PUBLIC_*` at build time. Set it in the dashboard and the exported
+   bundle will still report analytics as off.
+3. Verify: open the site, DevTools → Network → filter `gtag/js` (an
+   `https://www.googletagmanager.com/gtag/js?id=G-…` request), then GA4 →
+   **Reports → Realtime** with the tab open. Navigate between tabs: the URL
+   changes without a reload and each change produces one `page_view`.
+
+Why pageviews are sent manually: GA4's automatic pageview fires once per
+*document load*, and this is a single-page app — tab switches would all be
+credited to whatever page was loaded first. `send_page_view: false` disables the
+automatic hit and `AnalyticsTracker` sends one per route, including the first.
+
+Local development is untouched: with `EXPO_PUBLIC_GA_ID` absent, no script is
+injected and no `window.gtag` is defined, so `npx expo start` cannot pollute the
+property. The variable is commented out in [`.env.example`](.env.example) on
+purpose.
+
+**One local gotcha, measured:** the export cache can hand back the previous
+bundle after you add or remove `EXPO_PUBLIC_GA_ID`, id and all, without
+re-inlining the variable — removing the ID produced a byte-identical
+`entry-*.js` that still contained `G-TEST123456`. Use
+
+```bash
+EXPO_PUBLIC_GA_ID=G-XXXXXXXXXX npx expo export -p web --clear   # on
+npx expo export -p web --clear                            # off
+```
+
+when switching it on or off locally. A Pages build starts from a fresh checkout
+and does not hit this, so nothing extra is needed in CI.
+
+### 7.4 What is deliberately not there
+
+- **No `rel="canonical"` and no `og:url`.** Both must name the page they
+  describe, and one document shell wraps all routes; a canonical pointing at `/`
+  everywhere would tell Google to drop the other pages. Per-route metadata needs
+  `generateMetadata()` in SDK 58.
+- **No `hreflang`.** There is one indexable URL; the English toggle is client-side
+  copy, not a second route.
+- **The host is hardcoded in three places** — `src/lib/seo.ts`,
+  `public/robots.txt`, `public/sitemap.xml`, plus `EXPO_PUBLIC_SITE_URL` in
+  `wrangler.toml`. Moving to a custom domain means updating all of them; the OG
+  tags are baked into the build, so the update needs a redeploy.
+- **Unknown paths still return the root document** (Pages' single-page-app
+  fallback, see *Known limitations*), so a crawler that follows a dead link gets
+  a 200 and the dashboard. Shipping a `404.html` is what turns that off.
+- **No cookie consent.** gtag.js sets cookies on the first load where it is
+  enabled; that is a decision to make before marketing to EU visitors, not a bug.
+
 ## Rollback
 
 - **Render:** the service's **Events** list keeps every deploy; "Redeploy" an

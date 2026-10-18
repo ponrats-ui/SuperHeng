@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <title>SuperHeng — social share card</title>
+    <!--
+      Source for `public/og-image.png`, the Open Graph / Twitter share image.
+
+      It is plain HTML rather than a drawing tool so the card is reproducible and
+      reviewable: the copy, colors and fonts are the same values the app uses
+      (`src/constants/theme.ts`). Regenerate with headless Chrome, which shapes
+      Thai correctly through HarfBuzz — Pillow without libraqm does not:
+
+        chrome --headless=new --hide-scrollbars --force-device-scale-factor=1 \
+          --window-size=1200,630 \
+          --screenshot="../public/og-image.png" \
+          "file:///<absolute path to this file>"
+
+      1200×630 is 1.91:1, the ratio Facebook, LINE and X crop against. This file
+      lives outside `public/` on purpose: it is build tooling, not a site asset.
+    -->
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        width: 1200px;
+        height: 630px;
+        overflow: hidden;
+        background: #070b18;
+        color: #f5f7fc;
+        font-family: "Leelawadee UI", Tahoma, "Segoe UI", sans-serif;
+        position: relative;
+      }
+
+      /* Crimson bloom top-right, gold bloom bottom-left — the app's accent pair,
+         at a low enough opacity to stay a background. */
+      .glow-crimson,
+      .glow-gold {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(120px);
+      }
+      .glow-crimson {
+        width: 620px;
+        height: 620px;
+        right: -160px;
+        top: -260px;
+        background: rgba(200, 16, 46, 0.42);
+      }
+      .glow-gold {
+        width: 520px;
+        height: 520px;
+        left: -220px;
+        bottom: -260px;
+        background: rgba(212, 175, 55, 0.22);
+      }
+
+      /* Analytic motif: concentric rings with an ascending series inside them. */
+      .motif {
+        position: absolute;
+        right: 0;
+        top: 0;
+        width: 600px;
+        height: 630px;
+      }
+
+      .content {
+        position: relative;
+        z-index: 2;
+        height: 100%;
+        padding: 104px 92px 64px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .rule {
+        width: 96px;
+        height: 8px;
+        border-radius: 4px;
+        background: #f0ce63;
+        margin-bottom: 34px;
+      }
+
+      .wordmark {
+        font-size: 96px;
+        font-weight: 700;
+        letter-spacing: -2px;
+        line-height: 1;
+      }
+      .wordmark .gold { color: #f0ce63; }
+
+      .headline {
+        margin-top: 40px;
+        font-size: 40px;
+        font-weight: 700;
+        line-height: 1.32;
+        max-width: 660px;
+        color: #f5f7fc;
+      }
+
+      .divider {
+        margin: 34px 0 26px;
+        width: 660px;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.14);
+      }
+
+      .models {
+        font-size: 25px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        color: #a7afc2;
+      }
+      .footer {
+        margin-top: auto;
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        width: 660px;
+        font-size: 21px;
+        color: #6e7689;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="glow-crimson"></div>
+    <div class="glow-gold"></div>
+
+    <svg class="motif" viewBox="0 0 600 630" fill="none" aria-hidden="true">
+      <circle cx="330" cy="300" r="300" stroke="#1d2540" stroke-width="3" />
+      <circle cx="330" cy="300" r="210" stroke="#1d2540" stroke-width="2" opacity="0.7" />
+      <polyline
+        points="90,470 170,420 240,440 320,352 400,370 470,288 560,300"
+        stroke="#e8394f"
+        stroke-width="4"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        opacity="0.85"
+      />
+      <g fill="#f0ce63">
+        <circle cx="90" cy="470" r="6" />
+        <circle cx="170" cy="420" r="6" />
+        <circle cx="240" cy="440" r="6" />
+        <circle cx="320" cy="352" r="6" />
+        <circle cx="400" cy="370" r="6" />
+        <circle cx="470" cy="288" r="6" />
+        <circle cx="560" cy="300" r="6" />
+      </g>
+    </svg>
+
+    <div class="content">
+      <div class="rule"></div>
+      <div class="wordmark">Super<span class="gold">Heng</span></div>
+      <div class="headline">
+        แพลตฟอร์มวิเคราะห์สถิติด้วย AI<br />ระดับพรีเมียม
+      </div>
+      <div class="divider"></div>
+      <div class="models">ARIMA · Markov · Bayesian · Frequency</div>
+      <div class="footer">
+        <span>superheng-3yf.pages.dev</span>
+        <span>อัปเดตผลเรียลไทม์</span>
+      </div>
+    </div>
+  </body>
+</html>

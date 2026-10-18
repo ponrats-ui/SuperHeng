@@ -79,5 +79,33 @@ EXPO_PUBLIC_API_URL = "https://superheng-api.onrender.com"
 # There is deliberately no EXPO_PUBLIC_STRIPE_* variable. The app redirects to
 # Stripe's hosted Checkout and never loads Stripe.js, so no key belongs in the
 # client at all — `.env.example` explains why at length.
+
+# --- Marketing: SEO and analytics -------------------------------------------
+#
+# The site's own origin, used to build the absolute URLs that crawlers and social
+# scrapers require (`og:image`, `twitter:image`). Relative paths are ignored by
+# several scrapers, which is the failure a share card exists to prevent. Read by
+# `src/lib/seo.ts` at build time; the value below is also that module's fallback,
+# so a local `npx expo export` produces correct tags without any setup.
+#
+# Change this when a custom domain replaces the pages.dev host — the OG and
+# Twitter tags in the exported HTML are absolute and are baked in at build time.
+EXPO_PUBLIC_SITE_URL = "https://superheng-3yf.pages.dev"
+
+# GA4 measurement ID (`G-XXXXXXXXXX`). **Commented out on purpose: an empty or
+# placeholder value is not harmless.** Anything that matches the `G-` shape loads
+# gtag.js, so a fake ID would send hits to a property that does not exist and look
+# exactly like "analytics is broken". With the line absent there is no script, no
+# `window.gtag` and no collection at all — which is also why local testing cannot
+# pollute the property.
+#
+# Uncomment and set the real ID from GA4 Admin > Data streams > Web > Measurement
+# ID. It is public by design (it ships in the page source either way); never put a
+# Measurement Protocol API secret here.
+#
+# EXPO_PUBLIC_GA_ID = "G-XXXXXXXXXX"
+
+# --- Accounts ----------------------------------------------------------------
+# Two more build-time values, for the premium subscription flow.
 EXPO_PUBLIC_SUPABASE_URL = "https://eiukzhtbslgoennqpvix.supabase.co"
 EXPO_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpdWt6aHRic2xnb2VubnFwdml4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE4Mjc4ODEsImV4cCI6MjEwNzQwMzg4MX0.abhhWIr5sz0EJ_fny3z4bswe1KYhXZqET9t8BJkuqQo"
