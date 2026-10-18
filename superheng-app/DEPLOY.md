@@ -353,6 +353,19 @@ planned `X-API-Key`) and not a cookie — there is nothing for a browser to
 attach. It is exactly the switch to remove before any cookie-based session
 exists, or any site will be able to act as a logged-in user.
 
+**What the wildcard does *not* cover: paying.** CORS decides which origins may
+*call* this API. It has no say over where a payment may send the customer *back*,
+because a client-supplied redirect target is an open redirect and "anything is
+allowed" is not an allow-list. That separate fence is `FRONTEND_BASE_URL`, and it is
+**required for any browser checkout even while CORS is wide open**: with it unset,
+`POST /api/create-checkout-session` answers 403 for the app's own origin and no
+session is ever created. That is measured, not predicted — see
+[6.5.1](#651-a-whole-test-mode-purchase-start-to-finish--2026-10-18). It is declared
+in `render.yaml`; if the narrowed `CORS_ORIGINS` below is applied instead, the same
+origin in that list satisfies the check, and `CORS_ORIGIN_REGEX` extends it to
+preview deployments. The two settings are one rule in different spellings: an origin
+that may call this API is an origin a payment may return to.
+
 ### Before launch
 
 Replace the two beta variables in **Render → superheng-api → Environment** with:
@@ -615,11 +628,29 @@ bypasses RLS. It is a full-access admin credential for the project: server-side
 only, never `EXPO_PUBLIC_`, never in the app, never committed. It is read in exactly
 one place, `backend/webhook.py`.
 
-`FRONTEND_BASE_URL` is where Stripe sends the customer back after paying. Without
-it the fallback is the first non-wildcard `CORS_ORIGINS` entry, and failing that
-`http://localhost:8081`. A payment still succeeds and is still granted without it —
-the webhook does not depend on the redirect — but the customer would land on a dead
-page immediately after paying, which is a bad way to end a purchase.
+`FRONTEND_BASE_URL` is where Stripe sends the customer back after paying, **and the
+beta cannot take a card payment without it.** It is not a courtesy redirect: a
+wildcard `CORS_ORIGINS` lets the browser *call* this API but contributes nothing to
+the return-URL allow-list — a wildcard is not an allow-list — so with this unset
+`POST /api/create-checkout-session` refuses the app's own origin with a **403 before
+any session exists**:
+
+```
+return_origin 'https://superheng-3yf.pages.dev' is not an origin this API will send
+  a payment back to. Add it to CORS_ORIGINS (or FRONTEND_BASE_URL) on the server.
+```
+
+That is measured, not predicted: it is what production did on 2026-10-18 (see
+[6.5.1](#651-a-whole-test-mode-purchase-start-to-finish--2026-10-18)), where the
+app surfaced the message verbatim and charged nothing. [`../render.yaml`](../render.yaml)
+now declares it, so a Blueprint sync applies it; setting it by hand in Render →
+Environment has the same effect immediately.
+
+Once it is set, the fallback order is otherwise unchanged — first non-wildcard
+`CORS_ORIGINS` entry, then `http://localhost:8081` — which is why a *narrowed*
+`CORS_ORIGINS` also fixes it, and why a preview deployment still needs the
+`CORS_ORIGIN_REGEX` from the Blueprint. Note that the webhook never depends on any
+of this: an entitlement is granted even if the customer's browser lands nowhere.
 
 Optional: `STRIPE_PAYMENT_METHODS` (`card,promptpay` by default; use `card` on a
 non-Thai account, or `dynamic` to let Stripe choose its own set), `STRIPE_API_VERSION`
@@ -677,6 +708,55 @@ Then check these in order. Each catches a different failure:
    There is deliberately no automatic revocation on refund — losing access the
    instant a refund is issued is a product decision, and it should be made
    explicitly rather than as a side effect.
+
+#### 6.5.1 A whole test-mode purchase, start to finish — 2026-10-18
+
+Run against production with Stripe in test mode and the `4242 4242 4242 4242` card,
+once the payment secrets were in place — row 0 is the health check that says so. It is
+recorded here because a green deploy proves nothing about this feature: the only
+evidence that matters is a purchase that lands, a webhook that grants, and a free
+account that becomes premium with no other writer touching the table. All four
+variables from step 3 show up below, including the one that was still missing.
+
+| # | What was done | What came back |
+| --- | --- | --- |
+| 0 | `GET /api/health` | `gateway_configured: true`, `provider: "stripe"`, `entitlement_writer: "configured"` |
+| 1 | Registered a throwaway account in the app, then tapped **Upgrade** | `POST /api/create-checkout-session` → **403**, `return_origin … is not an origin this API will send a payment back to`, `charged: false`. Nothing was charged and the app said so. This is the failure step 3's `FRONTEND_BASE_URL` fixes |
+| 2 | Re-ran the same call omitting `return_origin` (the server's own default), to get past row 1 and exercise the rest of the chain. **The production 403 in row 1 is still unfixed as of this writing** — it is a missing environment variable, not a code defect | `200`, `status: "created"`, `live_mode: false`, `amount_minor: 9900`, `currency: "thb"`, `payment_method_types: ["card", "promptpay"]`, session id `cs_test_…`, `charged: false`, `subscription_granted: false` |
+| 3 | Opened the returned `checkout_url` | Hosted page listed **Premium · monthly**, **THB 99.00**, "30-day access to the Premium analysis", card + PromptPay — the catalogue's own line item, read back from Stripe |
+| 4 | Paid with the test card | Stripe redirected to the session's `success_url`. With `FRONTEND_BASE_URL` unset that was the dev fallback `http://localhost:8081/premium?checkout=success&success=true&session_id=…`, so the browser showed a connection error — the *page* was wrong, the payment was not |
+| 5 | `GET /api/me` on the real origin, seconds later | `is_premium: true`, `subscription_tier: "premium"`, `subscription_provider: "stripe"`, `subscription_expiry: 2026-11-17T08:28:19Z`, `refusal_status: null` (was `403`) |
+| 6 | `GET /api/predict/premium` | **200** with Bayesian positional output (was 403 before paying) |
+| 7 | `/premium?success=true` | "Stripe is confirming your payment" **and** "this account already has Premium" — the celebratory path, not the paywall |
+| 8 | `/premium?cancel=true` | "การยกเลิกการชำระเงินแล้ว ยังไม่มีการเรียกเก็บเงิน" / "Payment cancelled, nothing was charged" |
+
+The entitlement in step 5 can only have been written by `apply_payment_event` from a
+signature-verified delivery: `create-session` returns `subscription_granted: false`
+in every mode, and the column is refused to every non-service role. So steps 4–6 are
+the webhook proof — a registered endpoint, a signing secret that matches, and a
+grant for the account that actually paid. The expiry is payment time + 30 days, from
+the server clock, not the browser's.
+
+**Not verified by this run.** Item 6 above (re-send the event and see `duplicate`
+with the expiry unmoved) and item 7 (refund keeps access until expiry) both need a
+human in the Stripe dashboard: it is not reachable from this workspace and the
+signing secret is not available locally, so neither can be reproduced here. The
+idempotency *mechanism* is covered by the test suite; what remains untested against
+Stripe's real retry is the delivery itself.
+
+The same is true of the ledger row itself. `payment_events` is revoked from `anon`
+and `authenticated` on purpose — the event id is the idempotency key and the amount is
+financial history — so no client can read back the row this delivery wrote, and the
+proof above is the *effect* rather than the row. Confirming the row (event id, session
+id, `result`) means the Supabase SQL editor, with the `payment_events` queries in the
+verification block at the end of
+[`backend/schema_profiles.sql`](backend/schema_profiles.sql).
+
+**The account this run created is a real row.** It is a stuck-open Premium seat
+until it is cleaned up — the payment that granted it was test mode, so no money
+moved, and it is inert apart from that. To revoke it, set the tier back rather than
+deleting the row (see [6.4](#64-making-an-account-premium-by-hand)), and revoke the
+same email in Supabase → Authentication if the seat should go away entirely.
 
 #### The invariant this feature is built around
 

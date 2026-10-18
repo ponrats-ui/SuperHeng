@@ -82,6 +82,24 @@ services:
       # the branch alias between builds, so an exact-match list alone cannot
       # cover them. Quoted with single quotes because YAML double quotes would
       # treat `\.` as an invalid escape.
+      # --- Where a payment may send the customer back ---------------------
+      # NOT optional, and NOT covered by CORS_ORIGINS above. A wildcard allows
+      # the browser to *call* the API but contributes nothing to the return-URL
+      # allow-list, because a wildcard is not an allow-list: accepting a claimed
+      # origin because anything is allowed would make this an open redirect, and
+      # the failure mode of an open redirect is a real payment landing on a
+      # look-alike page the attacker controls. See main.py, "Where a payment is
+      # allowed to send the customer back to".
+      #
+      # Measured on 2026-10-18, before this line existed: with `CORS_ORIGINS=*`
+      # and this unset, POST /api/create-checkout-session answered 403 for the
+      # app's own origin — `return_origin 'https://superheng-3yf.pages.dev' is
+      # not an origin this API will send a payment back to` — so *no* browser
+      # checkout could start at all, for any customer. Preview deployments have
+      # their own hostnames; the commented CORS_ORIGIN_REGEX above is what covers
+      # them once CORS_ORIGINS is narrowed before launch.
+      - key: FRONTEND_BASE_URL
+        value: https://superheng-3yf.pages.dev
       # --- Secrets: not stored in Git -------------------------------------
       # `sync: false` makes Render prompt for these in the dashboard and keeps
       # whatever is entered there; a `value:` here would be committed in plain

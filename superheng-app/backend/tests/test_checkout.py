@@ -626,6 +626,63 @@ def test_without_a_claimed_origin_the_configured_one_is_used(gateway, signed_in,
     assert gateway.calls[0][0]["success_url"].startswith("https://app.example.test/")
 
 
+def test_the_beta_wildcard_still_needs_the_frontend_origin_named(gateway, signed_in, monkeypatch):
+    """The production configuration for this beta: `CORS_ORIGINS=*` and a
+    `FRONTEND_BASE_URL` naming the app.
+
+    A wildcard contributes nothing here — a wildcard is not an allow-list — so with
+    it unset the app's own origin is refused and **no browser checkout can start**.
+    That is not hypothetical: it is what production did on 2026-10-18, and the app
+    showed the server's 403 verbatim while charging nothing. Naming the frontend
+    origin is what turns the same request into a payable session.
+    """
+    monkeypatch.setattr(main, "CORS_ORIGINS", ["*"])
+    monkeypatch.setattr(main, "FRONTEND_BASE_URL", "")
+
+    refused = post(
+        TestClient(main.app),
+        {"plan": "premium_monthly"},
+        return_origin="https://superheng-3yf.pages.dev",
+    )
+
+    assert refused.status_code == 403
+    assert "FRONTEND_BASE_URL" in refused.json()["detail"]
+    assert gateway.calls == []
+
+    monkeypatch.setattr(main, "FRONTEND_BASE_URL", "https://superheng-3yf.pages.dev")
+
+    accepted = post(
+        TestClient(main.app),
+        {"plan": "premium_monthly"},
+        return_origin="https://superheng-3yf.pages.dev",
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    params = gateway.calls[0][0]
+    assert params["success_url"].startswith("https://superheng-3yf.pages.dev/")
+    assert params["cancel_url"].startswith("https://superheng-3yf.pages.dev/")
+
+
+def test_naming_the_frontend_origin_is_not_a_pattern(gateway, signed_in, monkeypatch):
+    """`FRONTEND_BASE_URL` names one origin, not a wildcard.
+
+    Holding it must not make a look-alike host acceptable — `pages.dev.evil.example`
+    is exactly the URL a phishing mail would use — because that is the redirect an
+    attacker wants and the reason this fence exists rather than trusting the client.
+    """
+    monkeypatch.setattr(main, "CORS_ORIGINS", ["*"])
+    monkeypatch.setattr(main, "FRONTEND_BASE_URL", "https://superheng-3yf.pages.dev")
+
+    response = post(
+        TestClient(main.app),
+        {"plan": "premium_monthly"},
+        return_origin="https://superheng-3yf.pages.dev.evil.example",
+    )
+
+    assert response.status_code == 403
+    assert gateway.calls == []
+
+
 # ---------------------------------------------------------------------------
 # Gateway failures over HTTP
 # ---------------------------------------------------------------------------
