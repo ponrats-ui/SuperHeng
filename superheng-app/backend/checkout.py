@@ -232,11 +232,19 @@ def return_urls(origin: str) -> tuple[str, str]:
     the only way the returning page can name the session it belongs to. It is
     passed through to the app as a hint and used for nothing else: the redirect is
     what the customer's browser does, and the webhook is what decides access.
+
+    Two spellings of each flag are sent. ``checkout=success``/``checkout=cancelled``
+    is the original contract, and ``success=true``/``cancel=true`` is the simpler
+    one an integration guide tends to name; both are read by `/premium`, so a link
+    from either generation of the client means the same thing. They are additive
+    rather than a replacement because a link already printed by Stripe keeps
+    working — a return URL is not something this server can migrate.
     """
     base = origin.rstrip("/")
     return (
-        f"{base}{SUCCESS_PATH}?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
-        f"{base}{CANCEL_PATH}?checkout=cancelled",
+        f"{base}{SUCCESS_PATH}?checkout=success&success=true"
+        "&session_id={CHECKOUT_SESSION_ID}",
+        f"{base}{CANCEL_PATH}?checkout=cancelled&cancel=true",
     )
 
 

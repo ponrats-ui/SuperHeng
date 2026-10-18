@@ -31,11 +31,11 @@ Endpoints
                           the digits that were actually drawn (Premium tier)
 ``GET /api/me``            the caller's own account and subscription state
 ``GET /api/checkout/plans`` the subscription price list (public)
-``POST /api/checkout/create-session``
+``POST /api/checkout/create-session`` (alias ``/api/create-checkout-session``)
                           open a Stripe Checkout Session (card / PromptPay) for
                           the token's own account. Produces a payable URL; it
                           never charges and never grants.
-``POST /api/webhook/stripe``
+``POST /api/webhook/stripe`` (alias ``/api/webhook``)
                           Stripe's server-to-server events. Signature-verified,
                           idempotent, and the only code path that grants premium.
 
@@ -1468,6 +1468,17 @@ class CheckoutSessionRequest(BaseModel):
     )
 
 
+# The same handler is served under the shorter name the integration brief uses.
+# A stacked route rather than a second function: an alias that re-implemented the
+# token check, the plan lookup or the return-URL allow-list would be a second
+# place for those rules to drift, and the drift would be invisible until someone
+# bought through the other path. Both names therefore run the identical code.
+@app.post(
+    "/api/create-checkout-session",
+    tags=["checkout"],
+    summary="Create a Checkout Session (alias of /api/checkout/create-session)",
+    response_description="Identical to `/api/checkout/create-session`.",
+)
 @app.post(
     "/api/checkout/create-session",
     tags=["checkout"],
@@ -1572,6 +1583,15 @@ async def create_checkout_session(
 # ---------------------------------------------------------------------------
 # Stripe webhook — the only code path in the project that grants premium
 # ---------------------------------------------------------------------------
+# Alias for the same reason as the checkout route above: the handler that verifies
+# a signature and writes the entitlement exists once, and is registered at both
+# names so a dashboard endpoint configured to either spelling is served by it.
+@app.post(
+    "/api/webhook",
+    tags=["checkout"],
+    summary="Stripe events (alias of /api/webhook/stripe)",
+    response_description="Identical to `/api/webhook/stripe`.",
+)
 @app.post(
     "/api/webhook/stripe",
     tags=["checkout"],

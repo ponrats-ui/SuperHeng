@@ -581,6 +581,11 @@ Events : checkout.session.completed
          checkout.session.expired
 ```
 
+`https://superheng-api.onrender.com/api/webhook` is the same handler under a
+shorter name, so a dashboard endpoint already pointing at either spelling works.
+The signing secret is per endpoint: if you add a second endpoint, copy *its* secret
+into `STRIPE_WEBHOOK_SECRET` rather than assuming the two share one.
+
 The `async_payment_*` events are not decoration. A session can complete while its
 payment is still settling, so the grant waits for the event that means the money
 actually arrived; without those two subscriptions a delayed payment would be

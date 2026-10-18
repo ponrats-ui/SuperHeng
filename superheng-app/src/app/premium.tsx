@@ -100,15 +100,24 @@ export default function PremiumScreen() {
   // What Stripe put on the return URL. Read as a *hint* only — see the docstring:
   // the redirect is the browser doing as it was told, and the entitlement is
   // decided by the webhook.
-  const params = useLocalSearchParams<{ checkout?: string }>();
+  //
+  // Both spellings are accepted on purpose: the server writes `checkout=success`
+  // and `checkout=cancelled` alongside `success=true` / `cancel=true`, so a link
+  // produced by either generation of the client, or a hand-written integration
+  // guide's URL, lands on the same state.
+  const params = useLocalSearchParams<{
+    checkout?: string;
+    success?: string;
+    cancel?: string;
+  }>();
   const [notice, setNotice] = useState<TranslationKey | null>(null);
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState<string | null>(null);
   const [catalogue, setCatalogue] = useState<CheckoutCatalogue | null>(null);
   const scrollRef = useRef<ScrollView>(null);
 
-  const returningFromStripe = params.checkout === 'success';
-  const cancelledAtStripe = params.checkout === 'cancelled';
+  const returningFromStripe = params.checkout === 'success' || params.success === 'true';
+  const cancelledAtStripe = params.checkout === 'cancelled' || params.cancel === 'true';
   const live = catalogue?.live === true;
 
   // Public and cheap, but failure is silent: a missing price falls back to the

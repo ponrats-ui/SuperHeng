@@ -428,6 +428,34 @@ def test_a_configured_checkout_returns_a_payable_url(gateway, signed_in):
     assert payload["expires_at"] == "2100-01-01T00:00:00+00:00"
 
 
+def test_the_alias_route_opens_the_same_checkout(gateway, signed_in):
+    """The integration brief names `/api/create-checkout-session`. It is the same
+    handler under a second path, so the plan lookup, the token check and the
+    gateway parameters cannot disagree between the two names."""
+    response = TestClient(main.app).post(
+        "/api/create-checkout-session",
+        json={"plan": "premium_monthly"},
+        headers={"Authorization": "Bearer good-token"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "created"
+    assert payload["checkout_url"].startswith("https://checkout.stripe.com/")
+    assert payload["charged"] is False
+    assert gateway.calls, "the alias never reached the gateway"
+
+
+def test_the_alias_route_still_requires_a_token(gateway):
+    """A second path must not become a second, weaker entrance to the same write."""
+    response = TestClient(main.app).post(
+        "/api/create-checkout-session", json={"plan": "premium_monthly"}
+    )
+
+    assert response.status_code == 401
+    assert gateway.calls == []
+
+
 def test_a_configured_checkout_still_charges_and_grants_nothing(gateway, signed_in):
     """The load-bearing invariant of this whole endpoint, and the one that survives
     every future change to it: opening a payment page takes no money and grants no
@@ -477,9 +505,12 @@ def test_the_success_url_tells_stripe_which_session_is_returning(
 
     params, _ = gateway.calls[0]
     assert params["success_url"] == (
-        "https://app.example.test/premium?checkout=success&session_id={CHECKOUT_SESSION_ID}"
+        "https://app.example.test/premium?checkout=success&success=true"
+        "&session_id={CHECKOUT_SESSION_ID}"
     )
-    assert params["cancel_url"] == "https://app.example.test/premium?checkout=cancelled"
+    assert params["cancel_url"] == (
+        "https://app.example.test/premium?checkout=cancelled&cancel=true"
+    )
 
 
 def test_the_metadata_carries_the_plan_the_webhook_will_look_up(gateway, signed_in):
@@ -649,6 +680,16 @@ def test_the_webhook_route_refuses_a_post_when_nothing_is_configured():
     response = TestClient(main.app).post(
         "/api/webhook/stripe", json={"type": "checkout.session.completed"}
     )
+
+    assert response.status_code == 503
+    assert payments.WEBHOOK_SECRET_ENV in response.json()["detail"]
+
+
+def test_the_webhook_alias_uses_the_same_signature_verifier():
+    """The brief names `/api/webhook`. Both paths must refuse an unverifiable
+    delivery in exactly the same way — an alias that accepted without a signature
+    would be a way around the only authentication this endpoint has."""
+    response = TestClient(main.app).post("/api/webhook", json={"type": "checkout.session.completed"})
 
     assert response.status_code == 503
     assert payments.WEBHOOK_SECRET_ENV in response.json()["detail"]

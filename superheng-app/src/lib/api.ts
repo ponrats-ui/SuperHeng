@@ -2231,7 +2231,7 @@ export async function createCheckoutSession(
   const { returnOrigin, ...rest } = options ?? {};
 
   return parseCheckoutSession(
-    await request('/api/checkout/create-session', {
+    await request('/api/create-checkout-session', {
       ...rest,
       accessToken,
       method: 'POST',
