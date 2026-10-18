@@ -722,7 +722,7 @@ variables from step 3 show up below, including the one that was still missing.
 | --- | --- | --- |
 | 0 | `GET /api/health` | `gateway_configured: true`, `provider: "stripe"`, `entitlement_writer: "configured"` |
 | 1 | Registered a throwaway account in the app, then tapped **Upgrade** | `POST /api/create-checkout-session` → **403**, `return_origin … is not an origin this API will send a payment back to`, `charged: false`. Nothing was charged and the app said so. This is the failure step 3's `FRONTEND_BASE_URL` fixes |
-| 2 | Re-ran the same call omitting `return_origin` (the server's own default), to get past row 1 and exercise the rest of the chain. **The production 403 in row 1 is still unfixed as of this writing** — it is a missing environment variable, not a code defect | `200`, `status: "created"`, `live_mode: false`, `amount_minor: 9900`, `currency: "thb"`, `payment_method_types: ["card", "promptpay"]`, session id `cs_test_…`, `charged: false`, `subscription_granted: false` |
+| 2 | Re-ran the same call omitting `return_origin` (the server's own default), to get past row 1 and exercise the rest of the chain | `200`, `status: "created"`, `live_mode: false`, `amount_minor: 9900`, `currency: "thb"`, `payment_method_types: ["card", "promptpay"]`, session id `cs_test_…`, `charged: false`, `subscription_granted: false` |
 | 3 | Opened the returned `checkout_url` | Hosted page listed **Premium · monthly**, **THB 99.00**, "30-day access to the Premium analysis", card + PromptPay — the catalogue's own line item, read back from Stripe |
 | 4 | Paid with the test card | Stripe redirected to the session's `success_url`. With `FRONTEND_BASE_URL` unset that was the dev fallback `http://localhost:8081/premium?checkout=success&success=true&session_id=…`, so the browser showed a connection error — the *page* was wrong, the payment was not |
 | 5 | `GET /api/me` on the real origin, seconds later | `is_premium: true`, `subscription_tier: "premium"`, `subscription_provider: "stripe"`, `subscription_expiry: 2026-11-17T08:28:19Z`, `refusal_status: null` (was `403`) |
@@ -751,6 +751,17 @@ proof above is the *effect* rather than the row. Confirming the row (event id, s
 id, `result`) means the Supabase SQL editor, with the `payment_events` queries in the
 verification block at the end of
 [`backend/schema_profiles.sql`](backend/schema_profiles.sql).
+
+**Row 1 was fixed the same day**, once `FRONTEND_BASE_URL` was set on Render (the
+Blueprint declares it; the dashboard has the same effect immediately). The same
+request from a browser session — `POST /api/create-checkout-session` with the app's
+own origin as `return_origin` — then answered `200`, `status: "created"`, a
+`checkout_url` on `checkout.stripe.com` and `charged: false`, where it had been a 403.
+`GET /api/diagnostics/paywall` reports `status: "ok"` with every check true, the
+banner below is gone from `/premium`, and `npm run smoke:paywall` passes all five
+checks including the authenticated one ([6.5.2](#652-re-check-it-without-a-purchase-npm-run-smokepaywall)).
+A deployment that cannot sell now says so within seconds, in the app and in one
+command, instead of at the end of a manual test purchase.
 
 **The account this run created is a real row.** It is a stuck-open Premium seat
 until it is cleaned up — the payment that granted it was test mode, so no money
