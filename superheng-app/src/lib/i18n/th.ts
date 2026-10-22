@@ -531,11 +531,21 @@ export const th: Record<TranslationKey, string> = {
   'insights.trendSubtitle': 'สัดส่วนเลขคู่และเลขสูงตามช่วงเวลา',
   'insights.parity': 'คู่ / คี่',
   'insights.range': 'สูง / ต่ำ',
+  // ตลาดของ Heat Map — ลาวและฮานอยเป็นฟีเจอร์ Premium ส่วนไทยฟรีเหมือนเดิม
+  'insights.marketFilter': 'เลือกตลาดของ Heat Map',
+  'insights.marketThai': 'ไทย',
+  'insights.marketLaos': 'ลาว',
+  'insights.marketHanoi': 'ฮานอย',
   'insights.heatmapTitle': 'แผนความร้อน 4 โมเดล',
   'insights.heatmapSubtitle': 'เลขท้าย 2 ตัว · งวดถัดไป · คะแนนรวมแบบถ่วงน้ำหนัก',
   'insights.heatmapHint': 'แตะช่องเพื่อวิเคราะห์เลขนั้น · ช่องเขียวสงวนไว้เฉพาะกลุ่มอันดับสูงสุดแบบโควตาตายตัว',
   'insights.heatmapLoading': 'กำลังคำนวณจากผลออกรางวัลจริง…',
   'insights.heatmapThin': 'ต้องมีอย่างน้อย {draws} งวดจึงจะคำนวณแผนความร้อนได้',
+  'insights.heatmapLockedTitle': 'Heat Map ของ{market}เป็นฟีเจอร์ Premium',
+  'insights.heatmapLockedBody': 'ปลดล็อกโควตาสี อันดับเลข และน้ำหนักโมเดลของงวดนี้',
+  'insights.heatmapLockedCta': 'อัปเกรด Premium เพื่อดู Heat Map เชิงลึก',
+  'insights.heatmapLockedNote':
+    'Heat Map ของลาวและฮานอยรวมอยู่ในแพ็กเกจ Premium · ตลาดไทยดูได้ฟรี',
   'insights.heatmapBlend': 'คะแนนรวม = ผลรวมถ่วงน้ำหนักของ 4 โมเดล',
   // น้ำหนักถูกคำนวณใหม่ทุกกระดานจากผลย้อนหลังของแต่ละโมเดล ประโยคนี้จึงรายงานตัวเลข
   // ที่กระดานใน `lib/heatmap.ts` ใช้จริงสำหรับงวดนี้

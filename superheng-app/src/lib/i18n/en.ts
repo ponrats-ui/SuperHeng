@@ -649,12 +649,23 @@ export const en = {
   'insights.trendSubtitle': 'Share of even digits and high digits over time',
   'insights.parity': 'Even / Odd',
   'insights.range': 'High / Low',
+  // Heat map markets — Laos and Hanoi are the Premium feature; Thai stays free.
+  'insights.marketFilter': 'Choose which market’s heat map to view',
+  'insights.marketThai': 'Thai',
+  'insights.marketLaos': 'Laos',
+  'insights.marketHanoi': 'Hanoi',
   'insights.heatmapTitle': 'Four-model heatmap',
   'insights.heatmapSubtitle': 'Bottom two digits · next draw · weighted ensemble score',
   'insights.heatmapHint':
     'Tap a cell to analyse that number · green is reserved for the board’s strict top band',
   'insights.heatmapLoading': 'Computing from the published draws…',
   'insights.heatmapThin': 'At least {draws} draws are needed to build the heatmap.',
+  'insights.heatmapLockedTitle': 'The {market} heat map is a Premium feature',
+  'insights.heatmapLockedBody':
+    'Unlock this draw’s colour quotas, code rankings and model weights.',
+  'insights.heatmapLockedCta': 'Upgrade to Premium to see the in-depth Heat Map',
+  'insights.heatmapLockedNote':
+    'The Laos and Hanoi heat maps are part of Premium · the Thai market stays free.',
   'insights.heatmapBlend': 'Ensemble score = weighted sum of four models',
   // The weights are refit per board from each model's own walk-forward log score, so the
   // sentence quotes whatever the board in `lib/heatmap.ts` actually used this draw.

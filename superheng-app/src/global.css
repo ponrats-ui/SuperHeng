@@ -23,3 +23,17 @@ html,
 body {
   background-color: #070b18;
 }
+
+/*
+ * Locked Premium heat map.
+ *
+ * React Native Web's style compiler drops React Native's `filter` property, so
+ * the 8px blur the panel asks for would never be applied on the web build. The
+ * panel sets `nativeID="superheng-heatmap-locked-grid"` (RNW renders it as the
+ * element's `id`) and this rule supplies the real CSS blur. 8px is heavy enough
+ * that a two-digit cell cannot be read, while the grid's shape, quota colours and
+ * relative shading stay visible.
+ */
+#superheng-heatmap-locked-grid {
+  filter: blur(8px);
+}

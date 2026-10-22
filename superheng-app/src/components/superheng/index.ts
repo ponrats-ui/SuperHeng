@@ -8,6 +8,7 @@ export * from './countdown';
 export * from './credits-footer';
 export * from './header-icon-button';
 export * from './heatmap';
+export * from './heatmap-panel';
 export * from './language-toggle';
 export * from './legal-disclaimer';
 export * from './locked-panel';
